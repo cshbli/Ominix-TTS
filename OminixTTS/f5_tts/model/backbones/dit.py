@@ -16,7 +16,7 @@ from torch.utils.checkpoint import checkpoint
 
 from x_transformers.x_transformers import RotaryEmbedding
 
-from MOTTS.f5_tts.model.modules import (
+from OminixTTS.f5_tts.model.modules import (
     TimestepEmbedding,
     ConvNeXtV2Block,
     ConvPositionEmbedding,
