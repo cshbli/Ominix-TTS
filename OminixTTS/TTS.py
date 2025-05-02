@@ -6,8 +6,6 @@ import traceback
 import time
 import torchaudio
 from tqdm import tqdm
-# now_dir = os.getcwd()
-# sys.path.append(now_dir)
 import ffmpeg
 import os
 from typing import List, Tuple, Union
@@ -25,8 +23,8 @@ from peft import LoraConfig, get_peft_model
 from tools.i18n.i18n import I18nAuto, scan_language_list
 from tools.my_utils import load_audio
 from module.mel_processing import spectrogram_torch
-from TTS_infer_pack.text_segmentation_method import splits
-from TTS_infer_pack.TextPreprocessor import TextPreprocessor
+from text_segmentation_method import splits
+from TextPreprocessor import TextPreprocessor
 from module.mel_processing import spectrogram_torch,mel_spectrogram_torch
 from process_ckpt import get_sovits_version_from_path_fast, load_sovits_new
 from voice_clone import extract_reference_semantic, extract_reference_spectrogram

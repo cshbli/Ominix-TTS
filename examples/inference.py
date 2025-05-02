@@ -5,7 +5,7 @@ from huggingface_hub import hf_hub_download
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../OminixTTS")))
 
-from TTS_infer_pack.TTS import TTS, TTS_Config
+from TTS import TTS, TTS_Config
 from tools.i18n.i18n import I18nAuto
 from model_download import download_folder_from_repo
 
