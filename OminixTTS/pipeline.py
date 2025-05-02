@@ -10,16 +10,17 @@ import ffmpeg
 import os
 from typing import List, Tuple, Union
 import numpy as np
+from peft import LoraConfig, get_peft_model
 import torch
 import torch.nn.functional as F
 import yaml
+from huggingface_hub import hf_hub_download
 from transformers import AutoModelForMaskedLM, AutoTokenizer
+
 from tools.audio_sr import AP_BWE
 from AR.models.t2s_lightning_module import Text2SemanticLightningModule
 from feature_extractor.cnhubert import CNHubert
 from module.models import SynthesizerTrn, SynthesizerTrnV3
-from peft import LoraConfig, get_peft_model
-# from time import time as ttime
 from tools.i18n.i18n import I18nAuto, scan_language_list
 from tools.my_utils import load_audio
 from module.mel_processing import spectrogram_torch
@@ -28,13 +29,13 @@ from TextPreprocessor import TextPreprocessor
 from module.mel_processing import spectrogram_torch,mel_spectrogram_torch
 from process_ckpt import get_sovits_version_from_path_fast, load_sovits_new
 from voice_clone import extract_reference_semantic, extract_reference_spectrogram
+from model_download import download_folder_from_repo
 
 language=os.environ.get("language","Auto")
 print(f"language: {language}")
 language=sys.argv[-1] if sys.argv[-1] in scan_language_list() else language
 print(f"language: {language}")
 i18n = I18nAuto(language=language)
-
 
 
 spec_min = -12
@@ -211,7 +212,6 @@ class TTS_Config:
         self.default_configs[version] = configs.get(version, self.default_configs[version])
         self.configs:dict = configs.get("custom", deepcopy(self.default_configs[version]))
 
-
         self.device = self.configs.get("device", torch.device("cpu"))
         if "cuda" in str(self.device) and not torch.cuda.is_available():
             print(f"Warning: CUDA is not available, set device to CPU.")
@@ -233,19 +233,32 @@ class TTS_Config:
 
 
         if (self.t2s_weights_path in [None, ""]) or (not os.path.exists(self.t2s_weights_path)):
-            self.t2s_weights_path = self.default_configs[version]['t2s_weights_path']
+            self.t2s_weights_path = gpt_path = hf_hub_download(
+                repo_id="cshbli/MoTTS",
+                filename="models/T2S/txdb-e15.ckpt",
+                revision="main"
+            )
             print(f"fall back to default t2s_weights_path: {self.t2s_weights_path}")
         if (self.vits_weights_path in [None, ""]) or (not os.path.exists(self.vits_weights_path)):
-            self.vits_weights_path = self.default_configs[version]['vits_weights_path']
+            self.vits_weights_path = hf_hub_download(
+                repo_id="cshbli/MoTTS",
+                filename="models/VITS/txdb_e12_s204.pth",
+                revision="main"
+            )
             print(f"fall back to default vits_weights_path: {self.vits_weights_path}")
         if (self.bert_base_path in [None, ""]) or (not os.path.exists(self.bert_base_path)):
-            self.bert_base_path = self.default_configs[version]['bert_base_path']
+            self.bert_base_path = download_folder_from_repo(    
+                repo_id="cshbli/MoTTS",
+                folder_path="models/BERT/chinese-roberta-wwm-ext-large"
+            )
             print(f"fall back to default bert_base_path: {self.bert_base_path}")
         if (self.cnhuhbert_base_path in [None, ""]) or (not os.path.exists(self.cnhuhbert_base_path)):
-            self.cnhuhbert_base_path = self.default_configs[version]['cnhuhbert_base_path']
+            self.cnhuhbert_base_path = download_folder_from_repo(
+                repo_id="cshbli/MoTTS",
+                folder_path="models/HuBERT/chinese-hubert-base"
+            )
             print(f"fall back to default cnhuhbert_base_path: {self.cnhuhbert_base_path}")
         self.update_configs()
-
 
         self.max_sec = None
         self.hz:int = 50
@@ -314,8 +327,8 @@ class TTS_Config:
         return isinstance(other, TTS_Config) and self.configs_path == other.configs_path
 
 
-class TTS:
-    def __init__(self, configs: Union[dict, str, TTS_Config]):
+class MPipeline:
+    def __init__(self, configs: Union[dict, str, TTS_Config] = None):
         if isinstance(configs, TTS_Config):
             self.configs = configs
         else:
@@ -1385,5 +1398,46 @@ class TTS:
 
         return torch.cat(audio_fragments, 0)
             
-                
+
+    def __call__(self, 
+            text:str,   # input text
+            text_language:str,  # select "en", "all_zh", "all_ja"
+            ref_audio_path:str,  # reference audio path          
+            ref_text:str="",     # reference text
+            ref_language:str="all_zh",  # reference text language
+            ref_text_free:bool=False, # whether to use reference text
+            aux_ref_audio_paths:list=[],
+            batch_size:int=100,             # inference batch size
+            speed_factor:float=1.0, # control speed of output audio
+            top_k:int=5,
+            top_p:float=1,
+            temperature:float=1,
+            text_split_method:str="cut4", #"cut0": not cut   "cut1": 4 sentences a cut   "cut2": 50 words a cut   "cut3": cut at chinese '。'  "cut4": cut at english '.'   "cut5": auto cut
+            split_bucket:bool=True,
+            return_fragment:bool=False,
+            fragment_interval:float=0.07,   # interval between every sentence
+            seed:int=233333
+            ):
+        
+        actual_seed = seed if seed not in [-1, "", None] else random.randrange(1 << 32)
+        inputs = {
+            "text": text,
+            "text_lang": text_language,
+            "ref_audio_path": ref_audio_path,
+            "prompt_text": ref_text if not ref_text_free else "",
+            "prompt_lang": ref_language,
+            "top_k": top_k,
+            "top_p": top_p,
+            "temperature": temperature,
+            "text_split_method": text_split_method,
+            "batch_size": batch_size,
+            "speed_factor": speed_factor,
+            "split_bucket": split_bucket,
+            "return_fragment": return_fragment,
+            "fragment_interval": fragment_interval,
+            "seed": actual_seed,
+        }
+        print(inputs)
+
+        return self.run(inputs)
 
