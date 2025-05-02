@@ -1,42 +1,13 @@
 import random
-import os, re, logging, sys
-import pdb
-import torch
-from pydub import AudioSegment
-import numpy as np
-from TTS_infer_pack.TTS import TTS, TTS_Config
-from TTS_infer_pack.text_segmentation_method import get_method
-from tools.i18n.i18n import I18nAuto
+import os, sys
 import soundfile as sf
+from huggingface_hub import hf_hub_download
 
-from huggingface_hub import hf_hub_download, snapshot_download
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../OminixTTS")))
 
-def download_folder_from_repo(repo_id, folder_path, local_dir=None):
-    """
-    Download a specific folder from a Hugging Face repository.
-    
-    Args:
-        repo_id (str): The ID of the repository (e.g., "username/repo-name")
-        folder_path (str): The path to the folder within the repository
-        local_dir (str, optional): Local directory where files will be downloaded
-        
-    Returns:
-        str: Path to the downloaded folder
-    """
-    # Make sure folder_path ends with /* to download all files in the folder
-    pattern = f"{folder_path}/*" if not folder_path.endswith("/*") else folder_path
-    
-    # Download only files matching the pattern
-    downloaded_repo_path = snapshot_download(
-        repo_id=repo_id,
-        allow_patterns=pattern,
-        local_dir=local_dir,
-        local_dir_use_symlinks=False
-    )
-    
-    # Return the path to the specific folder
-    full_path = os.path.join(downloaded_repo_path, folder_path)
-    return full_path
+from TTS_infer_pack.TTS import TTS, TTS_Config
+from tools.i18n.i18n import I18nAuto
+from model_download import download_folder_from_repo
 
 #is_half = True
 is_half = False
@@ -84,37 +55,6 @@ if bert_path is not None:
 
 tts_pipline = TTS(tts_config)
 
-def inference(text, text_lang,
-              ref_audio_path, prompt_text,
-              prompt_lang, top_k,
-              top_p, temperature,
-              text_split_method, batch_size,
-              speed_factor, ref_text_free,
-              split_bucket,fragment_interval,
-              seed,
-              ):
-    actual_seed = seed if seed not in [-1, "", None] else random.randrange(1 << 32)
-    inputs={
-        "text": text,
-        "text_lang": text_lang,
-        "ref_audio_path": ref_audio_path,
-        "prompt_text": prompt_text if not ref_text_free else "",
-        "prompt_lang": prompt_lang,
-        "top_k": top_k,
-        "top_p": top_p,
-        "temperature": temperature,
-        "text_split_method": text_split_method,
-        "batch_size":int(batch_size),
-        "speed_factor":float(speed_factor),
-        "split_bucket":split_bucket,
-        "return_fragment":False,
-        "fragment_interval":fragment_interval,
-        "seed":actual_seed,
-    }
-    print(inputs)
-    for item in tts_pipline.run(inputs):
-        yield item, actual_seed
-
 text = "Well, you know what the say , Families are like fudge, mostly sweet, but sometimes nuts. My family is doing great, thanks for asking!  My son is growing up to be a smart and handsome young man, just like his mom. He's currently working on his own talker show, which I'm sure will be even more hilarious than mine."    #input text
 text_language = "en"           #select "en","all_zh","all_ja"
 inp_ref = "./dataset/doubao-ref-ours.wav"   #path of reference speaker
@@ -131,13 +71,32 @@ split_bucket = True            #suggest on
 fragment_interval = 0.07     #interval between every sentence
 seed = 233333               #seed
 
-[output] = inference(text,text_language, inp_ref,
-                prompt_text, prompt_language,
-                top_k, top_p, temperature,
-                how_to_cut, batch_size,
-                speed_factor, ref_text_free,
-                split_bucket,fragment_interval,
-                seed)
+actual_seed = seed if seed not in [-1, "", None] else random.randrange(1 << 32)
+inputs = {
+    "text": text,
+    "text_lang": text_language,
+    "ref_audio_path": inp_ref,
+    "prompt_text": prompt_text if not ref_text_free else "",
+    "prompt_lang": prompt_language,
+    "top_k": top_k,
+    "top_p": top_p,
+    "temperature": temperature,
+    "text_split_method": how_to_cut,
+    "batch_size": int(batch_size),
+    "speed_factor": float(speed_factor),
+    "split_bucket": split_bucket,
+    "return_fragment": False,
+    "fragment_interval": fragment_interval,
+    "seed": actual_seed,
+}
+print(inputs)
 
+# Get results from pipeline
+result_generator = tts_pipline.run(inputs)
+results = []
+for item in result_generator:
+    results.append((item, actual_seed))
 
+# Write output
+output = results[0]
 sf.write('./output.wav', output[0][1], samplerate=output[0][0], subtype='PCM_16')

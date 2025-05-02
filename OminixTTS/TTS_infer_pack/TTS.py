@@ -6,8 +6,8 @@ import traceback
 import time
 import torchaudio
 from tqdm import tqdm
-now_dir = os.getcwd()
-sys.path.append(now_dir)
+# now_dir = os.getcwd()
+# sys.path.append(now_dir)
 import ffmpeg
 import os
 from typing import List, Tuple, Union
@@ -21,8 +21,7 @@ from AR.models.t2s_lightning_module import Text2SemanticLightningModule
 from feature_extractor.cnhubert import CNHubert
 from module.models import SynthesizerTrn, SynthesizerTrnV3
 from peft import LoraConfig, get_peft_model
-import librosa
-from time import time as ttime
+# from time import time as ttime
 from tools.i18n.i18n import I18nAuto, scan_language_list
 from tools.my_utils import load_audio
 from module.mel_processing import spectrogram_torch
@@ -30,6 +29,7 @@ from TTS_infer_pack.text_segmentation_method import splits
 from TTS_infer_pack.TextPreprocessor import TextPreprocessor
 from module.mel_processing import spectrogram_torch,mel_spectrogram_torch
 from process_ckpt import get_sovits_version_from_path_fast, load_sovits_new
+from voice_clone import extract_reference_semantic, extract_reference_spectrogram
 
 language=os.environ.get("language","Auto")
 print(f"language: {language}")
@@ -328,7 +328,6 @@ class TTS:
         self.bert_tokenizer:AutoTokenizer = None
         self.bert_model:AutoModelForMaskedLM = None
         self.cnhuhbert_model:CNHubert = None
-        self.bigvgan_model:BigVGAN = None
         self.sr_model:AP_BWE = None
         self.sr_model_not_exist:bool = False
 
@@ -441,7 +440,7 @@ class TTS:
                 **kwargs
             )
             self.configs.is_v3_synthesizer = True
-            self.init_bigvgan()
+            # self.init_bigvgan()
             if "pretrained" not in weights_path and hasattr(vits_model, "enc_q"):
                 del vits_model.enc_q
 
@@ -485,19 +484,7 @@ class TTS:
         self.t2s_model = t2s_model
         if self.configs.is_half and str(self.configs.device)!="cpu":
             self.t2s_model = self.t2s_model.half()
-
-
-    def init_bigvgan(self):
-        if self.bigvgan_model is not None:
-            return
-        self.bigvgan_model = BigVGAN.from_pretrained("%s/MOTTS/pretrained_models/models--nvidia--bigvgan_v2_24khz_100band_256x" % (now_dir,), use_cuda_kernel=False)  # if True, RuntimeError: Ninja is required to load C++ extensions
-        # remove weight norm in the model and set to eval mode
-        self.bigvgan_model.remove_weight_norm()
-        self.bigvgan_model = self.bigvgan_model.eval()
-        if self.configs.is_half == True:
-            self.bigvgan_model = self.bigvgan_model.half().to(self.configs.device)
-        else:
-            self.bigvgan_model = self.bigvgan_model.to(self.configs.device)
+    
 
     def init_sr_model(self):
         if self.sr_model is not None:
@@ -577,8 +564,9 @@ class TTS:
                 including the prompt_semantic and refer_spepc.
             Args:
                 ref_audio_path: str, the path of the reference audio.
-        '''
-        self._set_prompt_semantic(ref_audio_path)
+        '''        
+        self.prompt_cache["prompt_semantic"] = extract_reference_semantic(ref_audio_path, self.configs.device, self.configs.sampling_rate,
+                                self.cnhuhbert_model, self.vits_model, self.configs.is_half)         
         self._set_ref_spec(ref_audio_path)
         self._set_ref_audio_path(ref_audio_path)
 
@@ -586,7 +574,13 @@ class TTS:
         self.prompt_cache["ref_audio_path"] = ref_audio_path
 
     def _set_ref_spec(self, ref_audio_path):
-        spec = self._get_ref_spec(ref_audio_path)
+        # spec = self._get_ref_spec(ref_audio_path)
+        spec, self.prompt_cache["raw_audio"], self.prompt_cache["raw_sr"] = extract_reference_spectrogram(ref_audio_path, self.configs.device,
+                                self.configs.filter_length,
+                                self.configs.sampling_rate,
+                                self.configs.hop_length,
+                                self.configs.win_length,
+                                self.configs.is_half)
         if self.prompt_cache["refer_spec"] in [[],None]:
             self.prompt_cache["refer_spec"]=[spec]
         else:
@@ -617,33 +611,6 @@ class TTS:
             spec = spec.half()
         return spec
 
-    def _set_prompt_semantic(self, ref_wav_path:str):
-        zero_wav = np.zeros(
-            int(self.configs.sampling_rate * 0.3),
-            dtype=np.float16 if self.configs.is_half else np.float32,
-        )
-        with torch.no_grad():
-            wav16k, sr = librosa.load(ref_wav_path, sr=16000)
-            if (wav16k.shape[0] > 160000 or wav16k.shape[0] < 48000):
-                raise OSError(i18n("参考音频在3~10秒范围外，请更换！"))
-            wav16k = torch.from_numpy(wav16k)
-            zero_wav_torch = torch.from_numpy(zero_wav)
-            wav16k = wav16k.to(self.configs.device)
-            zero_wav_torch = zero_wav_torch.to(self.configs.device)
-            if self.configs.is_half:
-                wav16k = wav16k.half()
-                zero_wav_torch = zero_wav_torch.half()
-
-            wav16k = torch.cat([wav16k, zero_wav_torch])
-            hubert_feature = self.cnhuhbert_model.model(wav16k.unsqueeze(0))[
-                "last_hidden_state"
-            ].transpose(
-                1, 2
-            )  # .float()
-            codes = self.vits_model.extract_latent(hubert_feature)
-
-            prompt_semantic = codes[0, 0].to(self.configs.device)
-            self.prompt_cache["prompt_semantic"] = prompt_semantic
 
     def batch_sequences(self, sequences: List[torch.Tensor], axis: int = 0, pad_value: int = 0, max_length:int=None):
         seq = sequences[0]

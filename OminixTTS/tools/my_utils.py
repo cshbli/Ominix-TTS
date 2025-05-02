@@ -1,4 +1,4 @@
-import platform,os,traceback
+import os,traceback
 import ffmpeg
 import numpy as np
 import gradio as gr
