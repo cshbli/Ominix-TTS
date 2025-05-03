@@ -1,27 +1,15 @@
 scipy
 tensorboard
 numba==0.56.4
-pytorch-lightning>2.0
-gradio>=4.0,<=4.24.0
 onnxruntime; sys_platform == 'darwin'
 onnxruntime-gpu; sys_platform != 'darwin'
 funasr==1.0.27
-cn2an
-pypinyin
 # pyopenjtalk>=0.3.4
-g2p_en
-torchaudio
 modelscope==1.10.0
 sentencepiece
-peft
 chardet
 PyYAML
 psutil
-jieba_fast
-jieba
-split-lang
-fast_langdetect>=0.3.0
-wordsegment
 rotary_embedding_torch
 ToJyutping 
 g2pk2
@@ -30,7 +18,6 @@ opencc; sys_platform != 'linux'
 opencc==1.1.1; sys_platform == 'linux'
 python_mecab_ko; sys_platform != 'win32'
 fastapi<0.112.2
-x_transformers
 torchmetrics<=1.5
 pydantic<=2.10.6
 ctranslate2>=4.0,<5

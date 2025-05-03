@@ -784,6 +784,7 @@ class MPipeline:
         '''
         self.stop_flag = True
 
+
     @torch.no_grad()
     def run(self, inputs:dict):
         """

@@ -10,14 +10,27 @@ readme = "README.md"
 authors = [{name = "Hongbing Li", email = "cshbli@hotmail.com"}]
 license = {file = "LICENSE"}
 requires-python = ">=3.9"
-dependencies = [    
+dependencies = [
+    "cn2an",
+    "fast_langdetect>=0.3.0",
     "ffmpeg-python",
+    "g2p_en",
+    "gradio>=4.0,<=4.24.0",
     "huggingface_hub>=0.13",
+    "jieba",
+    "jieba_fast",
     "librosa>=0.9.2",
-    "numpy>=1.23.4",
+    "matplotlib",
+    "numpy>=1.23.4,<2.0.0",
+    "peft",
+    "pypinyin",
+    "pytorch-lightning>2.0",
+    "split-lang",
     "torchaudio",
     "tqdm",
     "transformers>=4.43",
+    "wordsegment",
+    "x_transformers",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
