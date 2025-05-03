@@ -32,11 +32,8 @@ from .voice_clone import extract_reference_semantic, extract_reference_spectrogr
 from .model_download import download_folder_from_repo
 
 language=os.environ.get("language","Auto")
-print(f"language: {language}")
 language=sys.argv[-1] if sys.argv[-1] in scan_language_list() else language
-print(f"language: {language}")
 i18n = I18nAuto(language=language)
-
 
 spec_min = -12
 spec_max = 2
@@ -367,17 +364,11 @@ class MPipeline:
         self.precision:torch.dtype = torch.float16 if self.configs.is_half else torch.float32
 
     def _init_models(self,):
-        print(f"init_t2s_weights: {self.configs.t2s_weights_path}")
-        self.init_t2s_weights(self.configs.t2s_weights_path)
-        print(f"init_vits_weights: {self.configs.vits_weights_path}")
-        self.init_vits_weights(self.configs.vits_weights_path)
-        print(f"init_bert_weights: {self.configs.bert_base_path}")
-        self.init_bert_weights(self.configs.bert_base_path)
-        print(f"init_cnhuhbert_weights: {self.configs.cnhuhbert_base_path}")
+        self.init_t2s_weights(self.configs.t2s_weights_path)        
+        self.init_vits_weights(self.configs.vits_weights_path)        
+        self.init_bert_weights(self.configs.bert_base_path)        
         self.init_cnhuhbert_weights(self.configs.cnhuhbert_base_path)
-        # self.enable_half_precision(self.configs.is_half)
-
-
+        
 
     def init_cnhuhbert_weights(self, base_path: str):
         print(f"Loading CNHuBERT weights from {base_path}")
