@@ -23,8 +23,8 @@ from .module.models import SynthesizerTrn, SynthesizerTrnV3
 from .tools.i18n.i18n import I18nAuto, scan_language_list
 from .tools.my_utils import load_audio
 from .module.mel_processing import spectrogram_torch
-from .text_segmentation_method import splits
-from .TextPreprocessor import TextPreprocessor
+from .text_processor.text_segmentation import splits
+from .text_processor.processor import TextProcessor
 from .module.mel_processing import spectrogram_torch
 from .process_ckpt import get_sovits_version_from_path_fast, load_sovits_new
 from .voice_clone import extract_reference_semantic, extract_reference_spectrogram
@@ -311,10 +311,10 @@ class MPipeline:
 
         self._init_models()
 
-        self.text_preprocessor:TextPreprocessor = \
-                            TextPreprocessor(self.bert_model,
-                                            self.bert_tokenizer,
-                                            self.configs.device)
+        self.text_preprocessor:TextProcessor = \
+                            TextProcessor(self.bert_model,
+                                          self.bert_tokenizer,
+                                          self.configs.device)
 
 
         self.prompt_cache:dict = {

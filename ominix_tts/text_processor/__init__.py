@@ -1,8 +1,4 @@
 import os
-# if os.environ.get("version","v1")=="v1":
-#   from text.symbols import symbols
-# else:
-#   from text.symbols2 import symbols
 
 from .symbols import symbols as symbols_v1
 from .symbols2 import symbols as symbols_v2
