@@ -64,9 +64,9 @@ class TextProcessor:
         self.device = device
         self.bert_lock = threading.RLock()
 
-    def preprocess(self, text: str, lang: str, text_split_method: str, version: str = "v2") -> List[Dict]:
+    def process(self, text: str, lang: str, text_split_method: str, version: str = "v2") -> List[Dict]:
         """
-        Preprocess text for TTS: segment, extract features, and convert to phonemes
+        Process text for TTS: segment, extract features, and convert to phonemes
         
         Args:
             text: Input text to process
@@ -161,8 +161,21 @@ class TextProcessor:
         return texts
 
     def segment_and_extract_feature_for_text(self, text: str, language: str, version: str = "v1") -> Tuple[List[int], torch.Tensor, str]:
-        """Extract phonemes and BERT features from text"""
-        return self.get_phones_and_bert(text, language, version)    
+        """
+        Extract phoneme representation and BERT features from text
+        
+        This is the main interface for feature extraction from a text segment,
+        providing phonemes, BERT embeddings, and normalized text.
+        
+        Args:
+            text: Input text segment
+            language: Language code
+            version: Model version
+            
+        Returns:
+            Tuple of (phoneme IDs, BERT features, normalized text)
+        """
+        return self.get_phones_and_bert(text, language, version)
 
     def get_phones_and_bert(self, text: str, language: str, version: str, final: bool = False) -> Tuple[List[int], torch.Tensor, str]:
         """
@@ -178,74 +191,13 @@ class TextProcessor:
             Tuple of (phones, bert features, normalized text)
         """
         with self.bert_lock:
+            # Process based on language type
             if language in {"en", "all_zh", "all_ja", "all_ko", "all_yue"}:
-                # Normalize text by removing extra spaces
-                formattext = self._normalize_text(text, language)
-                    
-                # Special handling for Chinese with English mix
-                if language == "all_zh":
-                    if re.search(r'[A-Za-z]', formattext):
-                        formattext = re.sub(r'[a-z]', lambda x: x.group(0).upper(), formattext)
-                        formattext = chinese.mix_text_normalize(formattext)
-                        return self.get_phones_and_bert(formattext, "zh", version)
-                    else:
-                        phones, word2ph, norm_text = self.clean_text_inf(formattext, language, version)
-                        bert = self.get_bert_feature(norm_text, word2ph).to(self.device)
-                # Special handling for Cantonese with English mix
-                elif language == "all_yue" and re.search(r'[A-Za-z]', formattext):
-                    formattext = re.sub(r'[a-z]', lambda x: x.group(0).upper(), formattext)
-                    formattext = chinese.mix_text_normalize(formattext)
-                    return self.get_phones_and_bert(formattext, "yue", version)
-                # Default handling for other languages
-                else:
-                    phones, word2ph, norm_text = self.clean_text_inf(formattext, language, version)
-                    bert = torch.zeros(
-                        (1024, len(phones)),
-                        dtype=torch.float32,
-                    ).to(self.device)
-                    
-            # Handle mixed language texts
+                # Handle single language processing
+                phones, bert, norm_text = self._process_single_language(text, language, version)
             elif language in {"zh", "ja", "ko", "yue", "auto", "auto_yue"}:
-                textlist = []
-                langlist = []
-                
-                # Language detection
-                if language == "auto":
-                    for tmp in LangSegmenter.getTexts(text):
-                        langlist.append(tmp["lang"])
-                        textlist.append(tmp["text"])
-                elif language == "auto_yue":
-                    for tmp in LangSegmenter.getTexts(text):
-                        if tmp["lang"] == "zh":
-                            tmp["lang"] = "yue"
-                        langlist.append(tmp["lang"])
-                        textlist.append(tmp["text"])
-                else:
-                    for tmp in LangSegmenter.getTexts(text):
-                        if tmp["lang"] == "en":
-                            langlist.append(tmp["lang"])
-                        else:
-                            # Use user input language for non-English text
-                            langlist.append(language)
-                        textlist.append(tmp["text"])
-                        
-                # Process text segments
-                phones_list = []
-                bert_list = []
-                norm_text_list = []
-                
-                for i in range(len(textlist)):
-                    lang = langlist[i]
-                    phones, word2ph, norm_text = self.clean_text_inf(textlist[i], lang, version)
-                    bert = self._get_bert_for_lang(phones, word2ph, norm_text, lang)
-                    phones_list.append(phones)
-                    norm_text_list.append(norm_text)
-                    bert_list.append(bert)
-                    
-                # Combine results
-                bert = torch.cat(bert_list, dim=1)
-                phones = sum(phones_list, [])
-                norm_text = ''.join(norm_text_list)
+                # Handle mixed language processing
+                phones, bert, norm_text = self._process_mixed_language(text, language, version)
             else:
                 # Default empty result for unsupported languages
                 phones = []
@@ -257,7 +209,107 @@ class TextProcessor:
                 return self.get_phones_and_bert("." + text, language, version, final=True)
 
             return phones, bert, norm_text
-    
+
+    def _process_single_language(self, text: str, language: str, version: str) -> Tuple[List[int], torch.Tensor, str]:
+        """
+        Process text in a single language
+        
+        Args:
+            text: Input text
+            language: Language code
+            version: Model version
+            
+        Returns:
+            Tuple of (phones, bert features, normalized text)
+        """
+        # Normalize text by removing extra spaces
+        formattext = self._normalize_text(text, language)
+            
+        # Special handling for Chinese with English mix
+        if language == "all_zh":
+            if re.search(r'[A-Za-z]', formattext):
+                formattext = re.sub(r'[a-z]', lambda x: x.group(0).upper(), formattext)
+                formattext = chinese.mix_text_normalize(formattext)
+                return self.get_phones_and_bert(formattext, "zh", version)
+            else:
+                phones, word2ph, norm_text = self.clean_text_inf(formattext, language, version)
+                bert = self.get_bert_feature(norm_text, word2ph).to(self.device)
+                return phones, bert, norm_text
+                
+        # Special handling for Cantonese with English mix
+        elif language == "all_yue" and re.search(r'[A-Za-z]', formattext):
+            formattext = re.sub(r'[a-z]', lambda x: x.group(0).upper(), formattext)
+            formattext = chinese.mix_text_normalize(formattext)
+            return self.get_phones_and_bert(formattext, "yue", version)
+            
+        # Default handling for other languages
+        else:
+            phones, word2ph, norm_text = self.clean_text_inf(formattext, language, version)
+            bert = torch.zeros(
+                (1024, len(phones)),
+                dtype=torch.float32,
+            ).to(self.device)
+            return phones, bert, norm_text
+
+    def _process_mixed_language(self, text: str, language: str, version: str) -> Tuple[List[int], torch.Tensor, str]:
+        """
+        Process text with mixed languages
+        
+        Args:
+            text: Input text
+            language: Language code
+            version: Model version
+            
+        Returns:
+            Tuple of (phones, bert features, normalized text)
+        """
+        textlist = []
+        langlist = []
+        
+        # Language detection and segmentation
+        if language == "auto":
+            for tmp in LangSegmenter.getTexts(text):
+                langlist.append(tmp["lang"])
+                textlist.append(tmp["text"])
+        elif language == "auto_yue":
+            for tmp in LangSegmenter.getTexts(text):
+                if tmp["lang"] == "zh":
+                    tmp["lang"] = "yue"
+                langlist.append(tmp["lang"])
+                textlist.append(tmp["text"])
+        else:
+            for tmp in LangSegmenter.getTexts(text):
+                if tmp["lang"] == "en":
+                    langlist.append(tmp["lang"])
+                else:
+                    # Use user input language for non-English text
+                    langlist.append(language)
+                textlist.append(tmp["text"])
+                
+        # Process text segments
+        phones_list = []
+        bert_list = []
+        norm_text_list = []
+        
+        for i in range(len(textlist)):
+            lang = langlist[i]
+            phones, word2ph, norm_text = self.clean_text_inf(textlist[i], lang, version)
+            bert = self._get_bert_for_lang(phones, word2ph, norm_text, lang)
+            phones_list.append(phones)
+            norm_text_list.append(norm_text)
+            bert_list.append(bert)
+            
+        # Combine results
+        if bert_list:
+            bert = torch.cat(bert_list, dim=1)
+        else:
+            bert = torch.zeros((1024, 0), dtype=torch.float32).to(self.device)
+            
+        phones = sum(phones_list, [])
+        norm_text = ''.join(norm_text_list)
+        
+        return phones, bert, norm_text
+
     def get_bert_feature(self, text: str, word2ph: list) -> torch.Tensor:
         """Extract BERT features from text"""
         with torch.no_grad():

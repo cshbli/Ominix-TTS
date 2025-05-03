@@ -311,7 +311,7 @@ class MPipeline:
 
         self._init_models()
 
-        self.text_preprocessor:TextProcessor = \
+        self.text_processor:TextProcessor = \
                             TextProcessor(self.bert_model,
                                           self.bert_tokenizer,
                                           self.configs.device)
@@ -839,7 +839,7 @@ class MPipeline:
             print(i18n("实际输入的参考文本:"), prompt_text)
             if self.prompt_cache["prompt_text"] != prompt_text:
                 phones, bert_features, norm_text = \
-                    self.text_preprocessor.segment_and_extract_feature_for_text(
+                    self.text_processor.segment_and_extract_feature_for_text(
                                                                         prompt_text,
                                                                         prompt_lang,
                                                                         self.configs.version)
@@ -856,7 +856,7 @@ class MPipeline:
         t1 = time.perf_counter()
         data:list = None
         if not return_fragment:
-            data = self.text_preprocessor.preprocess(text, text_lang, text_split_method, self.configs.version)
+            data = self.text_processor.process(text, text_lang, text_split_method, self.configs.version)
             if len(data) == 0:
                 yield 16000, np.zeros(int(16000), dtype=np.int16)
                 return
@@ -872,7 +872,7 @@ class MPipeline:
                                 )
         else:
             print(f'############ {i18n("切分文本")} ############')
-            texts = self.text_preprocessor.pre_seg_text(text, text_lang, text_split_method)
+            texts = self.text_processor.pre_seg_text(text, text_lang, text_split_method)
             data = []
             for i in range(len(texts)):
                 if i%batch_size == 0:
@@ -883,7 +883,7 @@ class MPipeline:
                 batch_data = []
                 print(f'############ {i18n("提取文本Bert特征")} ############')
                 for text in tqdm(batch_texts):
-                    phones, bert_features, norm_text = self.text_preprocessor.segment_and_extract_feature_for_text(text, text_lang, self.configs.version)
+                    phones, bert_features, norm_text = self.text_processor.segment_and_extract_feature_for_text(text, text_lang, self.configs.version)
                     if phones is None:
                         continue
                     res={
