@@ -1,9 +1,6 @@
-import os, sys
 import soundfile as sf
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../OminixTTS")))
-
-from pipeline import MPipeline
+from ominix_tts import MPipeline
 
 pipeline = MPipeline()
 

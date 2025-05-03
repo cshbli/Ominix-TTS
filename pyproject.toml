@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "Ominix-TTS"
+name = "ominix-tts"
 version = "0.1.0"
 description = "A short description of your package"
 readme = "README.md"
@@ -11,7 +11,13 @@ authors = [{name = "Hongbing Li", email = "cshbli@hotmail.com"}]
 license = {file = "LICENSE"}
 requires-python = ">=3.9"
 dependencies = [    
-    "numpy>=1.21.0",
+    "ffmpeg-python",
+    "huggingface_hub>=0.13",
+    "librosa>=0.9.2",
+    "numpy>=1.23.4",
+    "torchaudio",
+    "tqdm",
+    "transformers>=4.43",
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -21,3 +27,14 @@ classifiers = [
 
 [project.urls]
 Homepage = "https://github.com/cshbli/Ominix-TTS"
+
+[tool.setuptools.package-data]
+"ominix_tts.tools.i18n" = ["locale/*.json"]
+"ominix_tts.text" = [
+    "opencpop-strict.txt", 
+    "cmudict.rep", 
+    "cmudict-fast.rep", 
+    "engdict-hot.rep",
+    "engdict_cache.pickle",
+    "namedict_cache.pickle"
+]

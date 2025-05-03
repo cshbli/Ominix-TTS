@@ -1,11 +1,17 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="Ominix-TTS",  # Package name (use hyphens, not underscores)
+    name="ominix-tts",  # Package name (use hyphens, not underscores)
     version="0.1.0",  # Initial version
     packages=find_packages(),  # Automatically find your_package/
-    install_requires=[  # List dependencies        
-        "numpy>=1.21.0",
+    install_requires=[  # List dependencies                
+        "ffmpeg-python",
+        "huggingface_hub>=0.13",
+        "librosa>=0.9.2",
+        "numpy>=1.23.4",
+        "torchaudio",
+        "tqdm",
+        "transformers>=4.43",
     ],
     author="Hongbing Li",
     author_email="cshbli@hotmail.com",
