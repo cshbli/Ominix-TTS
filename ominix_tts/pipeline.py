@@ -3,14 +3,12 @@ import os, sys, gc
 import random
 import traceback
 import time
-from tqdm import tqdm
 import ffmpeg
 import os
-from typing import List, Union
+from typing import Union
 import numpy as np
 from peft import LoraConfig, get_peft_model
 import torch
-import yaml
 from huggingface_hub import hf_hub_download
 from transformers import AutoModelForMaskedLM, AutoTokenizer
 
@@ -474,21 +472,67 @@ class MPipeline:
         if self.configs.is_half and str(self.configs.device)!="cpu":
             self.vits_model = self.vits_model.half()
 
-
-    def init_t2s_weights(self, weights_path: str):
+    def init_t2s_weights(self, weights_path: str) -> None:
+        """
+        Initialize Text-to-Semantic model weights from checkpoint file
+        
+        This function loads Text2Semantic model weights from the specified path,
+        configures the model parameters based on the checkpoint, and sets up the
+        model on the appropriate device with proper precision settings.
+        
+        Args:
+            weights_path: Path to the Text2Semantic model checkpoint file
+            
+        Raises:
+            FileNotFoundError: If the weights file doesn't exist
+            RuntimeError: If there's an issue loading the model weights
+        """
+        # Validate input path
+        if not os.path.exists(weights_path):
+            raise FileNotFoundError(f"Text2Semantic weights not found at: {weights_path}")
+            
         print(f"Loading Text2Semantic weights from {weights_path}")
-        self.configs.t2s_weights_path = weights_path        
-        self.configs.hz = 50
-        dict_s1 = torch.load(weights_path, map_location=self.configs.device, weights_only=False)
-        config = dict_s1["config"]
-        self.configs.max_sec = config["data"]["max_sec"]
-        t2s_model = Text2SemanticLightningModule(config, "****", is_train=False)
-        t2s_model.load_state_dict(dict_s1["weight"])
-        t2s_model = t2s_model.to(self.configs.device)
-        t2s_model = t2s_model.eval()
-        self.t2s_model = t2s_model
-        if self.configs.is_half and str(self.configs.device)!="cpu":
-            self.t2s_model = self.t2s_model.half()
+        self.configs.t2s_weights_path = weights_path
+        
+        try:
+            # Load checkpoint with appropriate device mapping
+            dict_s1 = torch.load(
+                weights_path, 
+                map_location=self.configs.device, 
+                weights_only=False
+            )
+            
+            # Extract configuration and update settings
+            config = dict_s1["config"]
+            if not config:
+                raise RuntimeError("Invalid checkpoint: missing configuration data")
+                
+            # Update configuration parameters
+            self.configs.hz = 50  # Fixed semantic token rate
+            self.configs.max_sec = config["data"]["max_sec"]
+            
+            # Initialize model with loaded configuration
+            t2s_model = Text2SemanticLightningModule(config, "****", is_train=False)
+            
+            # Load model weights
+            load_result = t2s_model.load_state_dict(dict_s1["weight"])
+            if load_result and hasattr(load_result, "missing_keys") and load_result.missing_keys:
+                print(f"Warning: Missing keys when loading T2S model: {load_result.missing_keys}")
+            
+            # Move model to device and set evaluation mode
+            t2s_model = t2s_model.to(self.configs.device)
+            t2s_model.eval()
+            
+            # Apply half-precision if requested (for GPU only)
+            if self.configs.is_half and str(self.configs.device) != "cpu":
+                t2s_model = t2s_model.half()
+                
+            # Store model in instance
+            self.t2s_model = t2s_model
+        
+        except Exception as e:
+            self.t2s_model = None
+            raise RuntimeError(f"Failed to load Text2Semantic model: {str(e)}") from e
     
     def stop(self,):
         '''
