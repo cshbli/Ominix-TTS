@@ -3,7 +3,6 @@ import os, sys, gc
 import random
 import traceback
 import time
-import torchaudio
 from tqdm import tqdm
 import ffmpeg
 import os
@@ -11,7 +10,6 @@ from typing import List, Union
 import numpy as np
 from peft import LoraConfig, get_peft_model
 import torch
-import torch.nn.functional as F
 import yaml
 from huggingface_hub import hf_hub_download
 from transformers import AutoModelForMaskedLM, AutoTokenizer
@@ -21,13 +19,10 @@ from .AR.models.t2s_lightning_module import Text2SemanticLightningModule
 from .feature_extractor.cnhubert import CNHubert
 from .module.models import SynthesizerTrn, SynthesizerTrnV3
 from .tools.i18n.i18n import I18nAuto, scan_language_list
-from .tools.my_utils import load_audio
-from .module.mel_processing import spectrogram_torch
 from .text_processor.text_segmentation import splits
-from .text_processor.processor import TextProcessor
-from .module.mel_processing import spectrogram_torch
+from .text_processor.processor import TextPreprocessor
+from .reference_processor.processor import ReferenceProcessor
 from .process_ckpt import get_sovits_version_from_path_fast, load_sovits_new
-from .voice_clone import extract_reference_semantic, extract_reference_spectrogram
 from .model_download import download_folder_from_repo
 
 language=os.environ.get("language","Auto")
@@ -54,34 +49,6 @@ def speed_change(input_audio:np.ndarray, speed:float, sr:int):
     processed_audio = np.frombuffer(out, np.int16)
 
     return processed_audio
-
-
-class DictToAttrRecursive(dict):
-    def __init__(self, input_dict):
-        super().__init__(input_dict)
-        for key, value in input_dict.items():
-            if isinstance(value, dict):
-                value = DictToAttrRecursive(value)
-            self[key] = value
-            setattr(self, key, value)
-
-    def __getattr__(self, item):
-        try:
-            return self[item]
-        except KeyError:
-            raise AttributeError(f"Attribute {item} not found")
-
-    def __setattr__(self, key, value):
-        if isinstance(value, dict):
-            value = DictToAttrRecursive(value)
-        super(DictToAttrRecursive, self).__setitem__(key, value)
-        super().__setattr__(key, value)
-
-    def __delattr__(self, item):
-        try:
-            del self[item]
-        except KeyError:
-            raise AttributeError(f"Attribute {item} not found")
 
 
 class NO_PROMPT_ERROR(Exception):
@@ -311,9 +278,19 @@ class MPipeline:
 
         self._init_models()
 
-        self.text_processor:TextProcessor = TextProcessor(self.bert_model,
-                                          self.bert_tokenizer,
-                                          self.configs.device)
+        self.text_preprocessor:TextPreprocessor = TextPreprocessor(
+            self.bert_model,
+            self.bert_tokenizer,
+            self.configs.device
+        )
+        
+        self.reference_processor:ReferenceProcessor = ReferenceProcessor(
+                self.text_preprocessor,
+                self.cnhuhbert_model, 
+                self.vits_model, 
+                self.configs.device, 
+                self.configs
+        )
 
         self.prompt_cache:dict = {
             "ref_audio_path" : None,
@@ -455,18 +432,6 @@ class MPipeline:
         if self.configs.is_half and str(self.configs.device)!="cpu":
             self.t2s_model = self.t2s_model.half()
     
-
-    def init_sr_model(self):
-        if self.sr_model is not None:
-            return
-        try:
-            self.sr_model:AP_BWE=AP_BWE(self.configs.device,DictToAttrRecursive)
-            self.sr_model_not_exist = False
-        except FileNotFoundError:
-            print(i18n("你没有下载超分模型的参数，因此不进行超分。如想超分请先参照教程把文件下载好"))
-            self.sr_model_not_exist = True
-
-
     def enable_half_precision(self, enable: bool = True, save: bool = True):
         '''
             To enable half precision for the TTS model.
@@ -739,52 +704,27 @@ class MPipeline:
 
         if fragment_interval<0.01:
             fragment_interval = 0.01
-            print(i18n("分段间隔过小，已自动设置为0.01"))
+            print(i18n("分段间隔过小，已自动设置为0.01"))        
         
-
-        
-        
-        
-        print("############ Reference Audio Processing ############")
+        print("############ Reference Audio/Text Processing ############")
         t_ref_start = time.perf_counter()
-        no_prompt_text = False
-        if prompt_text in [None, ""]:
-            no_prompt_text = True        
-        if not no_prompt_text:
-            assert prompt_lang in self.configs.languages
-        if no_prompt_text and self.configs.is_v3_synthesizer:
-            raise NO_PROMPT_ERROR("prompt_text cannot be empty when using SoVITS_V3")
-        
-        # Instantiate the reference processor if not already created
-        if not hasattr(self, "reference_processor"):
-            from .reference_processor.processor import ReferenceProcessor
-            self.reference_processor = ReferenceProcessor(
-                self.cnhuhbert_model, 
-                self.vits_model, 
-                self.configs.device, 
-                self.configs
-            )
-        
-        # Process reference audio
         try:
-            prompt_data = self.reference_processor.process_reference_audio(
-                ref_audio_path, 
-                aux_ref_audio_paths
-            )
-            
-            # Process prompt text if provided
+            no_prompt_text = prompt_text in [None, ""]
             if not no_prompt_text:
-                prompt_data = self.reference_processor.process_reference_text(
-                    prompt_text,
-                    prompt_lang,
-                    self.text_processor,
-                    self.configs.version
-                )
+                assert prompt_lang in self.configs.languages
+            if no_prompt_text and self.configs.is_v3_synthesizer:
+                raise NO_PROMPT_ERROR("prompt_text cannot be empty when using SoVITS_V3")
             
-            # Store the processed data in prompt_cache for backward compatibility
-            self.prompt_cache = prompt_data
+            self.prompt_cache = self.reference_processor.process_reference(
+                ref_audio_path=ref_audio_path,
+                prompt_text=prompt_text,
+                prompt_lang=prompt_lang,                
+                model_version=self.configs.version,
+                aux_ref_audio_paths=aux_ref_audio_paths
+            )
         except Exception as e:
-            print(f"Error processing reference audio: {str(e)}")            
+            print(f"Error processing reference audio: {str(e)}")
+            raise e            
         
         t_ref_end = time.perf_counter()
         t_reference = t_ref_end - t_ref_start
@@ -793,7 +733,7 @@ class MPipeline:
         ###### text preprocessing ########        
         data:list = None
         if not return_fragment:
-            data = self.text_processor.process(text, text_lang, text_split_method, self.configs.version)
+            data = self.text_preprocessor.process(text, text_lang, text_split_method, self.configs.version)
             if len(data) == 0:
                 yield 16000, np.zeros(int(16000), dtype=np.int16)
                 return
@@ -809,7 +749,7 @@ class MPipeline:
                                 )
         else:
             print(f'############ {i18n("切分文本")} ############')
-            texts = self.text_processor.pre_seg_text(text, text_lang, text_split_method)
+            texts = self.text_preprocessor.pre_seg_text(text, text_lang, text_split_method)
             data = []
             for i in range(len(texts)):
                 if i%batch_size == 0:
@@ -820,7 +760,7 @@ class MPipeline:
                 batch_data = []
                 print(f'############ {i18n("提取文本Bert特征")} ############')
                 for text in tqdm(batch_texts):
-                    phones, bert_features, norm_text = self.text_processor.segment_and_extract_feature_for_text(text, text_lang, self.configs.version)
+                    phones, bert_features, norm_text = self.text_preprocessor.segment_and_extract_feature_for_text(text, text_lang, self.configs.version)
                     if phones is None:
                         continue
                     res={

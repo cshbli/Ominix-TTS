@@ -2,6 +2,34 @@ import torch
 import numpy as np
 from typing import List, Tuple
 
+class DictToAttrRecursive(dict):
+    def __init__(self, input_dict):
+        super().__init__(input_dict)
+        for key, value in input_dict.items():
+            if isinstance(value, dict):
+                value = DictToAttrRecursive(value)
+            self[key] = value
+            setattr(self, key, value)
+
+    def __getattr__(self, item):
+        try:
+            return self[item]
+        except KeyError:
+            raise AttributeError(f"Attribute {item} not found")
+
+    def __setattr__(self, key, value):
+        if isinstance(value, dict):
+            value = DictToAttrRecursive(value)
+        super(DictToAttrRecursive, self).__setitem__(key, value)
+        super().__setattr__(key, value)
+
+    def __delattr__(self, item):
+        try:
+            del self[item]
+        except KeyError:
+            raise AttributeError(f"Attribute {item} not found")
+
+
 class AudioProcessor:
     """Handle audio post-processing and super-resolution operations"""
     
@@ -17,8 +45,7 @@ class AudioProcessor:
             return
             
         try:
-            from ..tools.audio_sr import AP_BWE
-            from ..tools.dict_attr import DictToAttrRecursive
+            from ..tools.audio_sr import AP_BWE            
             self.sr_model = AP_BWE(self.configs.device, DictToAttrRecursive)
             self.sr_model_not_exist = False
         except FileNotFoundError:

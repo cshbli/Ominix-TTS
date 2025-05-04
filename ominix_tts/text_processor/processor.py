@@ -43,7 +43,7 @@ class ProcessedText:
             "norm_text": self.norm_text,
         }
 
-class TextProcessor:
+class TextPreprocessor:
     """
     Text processing for TTS systems, handling segmentation,
     phoneme conversion, and BERT feature extraction.
@@ -52,7 +52,7 @@ class TextProcessor:
     def __init__(self, bert_model: AutoModelForMaskedLM,
                  tokenizer: AutoTokenizer, device: torch.device):
         """
-        Initialize TextProcessor with BERT model and tokenizer
+        Initialize TextPreprocessor with BERT model and tokenizer
         
         Args:
             bert_model: BERT model for feature extraction

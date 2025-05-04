@@ -9,7 +9,7 @@ from ..tools.my_utils import load_audio
 from ..module.mel_processing import spectrogram_torch
 from ..feature_extractor.cnhubert import CNHubert
 from ..module.models import SynthesizerTrn, SynthesizerTrnV3
-from ..text_processor.processor import TextProcessor
+from ..text_processor.processor import TextPreprocessor
 
 class ReferenceProcessor:
     """
@@ -20,6 +20,7 @@ class ReferenceProcessor:
     """
     
     def __init__(self, 
+                 text_preprocessor: TextPreprocessor,
                  cnhubert_model: CNHubert, 
                  vits_model: Union[SynthesizerTrn, SynthesizerTrnV3], 
                  device: torch.device, 
@@ -33,6 +34,7 @@ class ReferenceProcessor:
             device: Device to run processing on
             config: Configuration object with audio processing parameters
         """
+        self.text_preprocessor = text_preprocessor
         self.cnhubert_model = cnhubert_model
         self.vits_model = vits_model
         self.device = device
@@ -269,7 +271,7 @@ class ReferenceProcessor:
     def process_reference_text(self, 
                           prompt_text: str, 
                           prompt_lang: str, 
-                          text_processor: TextProcessor, 
+                          text_preprocessor: TextPreprocessor, 
                           model_version: str) -> Dict[str, Any]:
         """
         Process prompt text and combine it with reference audio features
@@ -296,7 +298,7 @@ class ReferenceProcessor:
         # Only reprocess if prompt has changed
         if prompt_text != self._cache.get("prompt_text"):
             print(f"Processing prompt text: {prompt_text}")
-            phones, bert_features, norm_text = text_processor.segment_and_extract_feature_for_text(
+            phones, bert_features, norm_text = text_preprocessor.segment_and_extract_feature_for_text(
                 prompt_text,
                 prompt_lang,
                 model_version
@@ -309,4 +311,80 @@ class ReferenceProcessor:
             self._cache["bert_features"] = bert_features
             self._cache["norm_text"] = norm_text
             
+        return self._cache
+    
+    def process_reference(self,
+                     ref_audio_path: str,
+                     prompt_text: Optional[str] = None,
+                     prompt_lang: Optional[str] = None,
+                     model_version: Optional[str] = None,
+                     aux_ref_audio_paths: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Process reference audio and text for voice cloning
+        
+        This unified function handles both the reference audio processing
+        and the prompt text processing in a single call, which improves
+        efficiency and simplifies the pipeline code.
+        
+        Args:
+            ref_audio_path: Path to main reference audio file
+            prompt_text: Optional prompt text for voice cloning guidance
+            prompt_lang: Language of the prompt text
+            model_version: Model version (required if prompt_text is provided)
+            aux_ref_audio_paths: Optional paths to auxiliary reference audio files
+                            for multi-speaker tone fusion
+            
+        Returns:
+            Dictionary with processed reference features and prompt data
+            
+        Raises:
+            ValueError: If reference path is empty and no cached data exists
+                    or if prompt_text is provided without text_processor/model_version
+        """
+        # Process reference audio if provided or check if we have cached features
+        if ref_audio_path in [None, ""]:
+            if (self._cache["prompt_semantic"] is None or self._cache["refer_spec"] in [None, []]):
+                raise ValueError("Reference audio path cannot be empty when reference features haven't been previously set")
+            # Skip processing if ref_audio_path is empty but we have cached reference data
+        else:
+            if not ref_audio_path or not os.path.exists(ref_audio_path):
+                raise ValueError(f"Reference audio path does not exist: {ref_audio_path}")            
+
+            # Check if we need to reprocess the primary reference audio
+            if ref_audio_path != self._cache["ref_audio_path"]:
+                self._extract_primary_reference(ref_audio_path)
+                self._cache["ref_audio_path"] = ref_audio_path
+            
+            # Process auxiliary references if needed
+            aux_ref_audio_paths = aux_ref_audio_paths or []
+            self._process_auxiliary_references(aux_ref_audio_paths)
+        
+        # Process prompt text if provided
+        if prompt_text and prompt_text.strip():
+            if not model_version:
+                raise ValueError("Model version must be provided when processing prompt text")
+                
+            from ..text_processor.text_segmentation import splits
+            
+            # Add sentence terminator if needed
+            prompt_text = prompt_text.strip("\n")
+            if prompt_text and prompt_text[-1] not in splits:
+                prompt_text += "。" if prompt_lang != "en" else "."
+                
+            # Only reprocess if prompt has changed
+            if prompt_text != self._cache.get("prompt_text") or prompt_lang != self._cache.get("prompt_lang"):
+                print(f"Processing prompt text: {prompt_text}")
+                phones, bert_features, norm_text = self.text_preprocessor.segment_and_extract_feature_for_text(
+                    prompt_text,
+                    prompt_lang,
+                    model_version
+                )
+                
+                # Update cache with new prompt data
+                self._cache["prompt_text"] = prompt_text
+                self._cache["prompt_lang"] = prompt_lang
+                self._cache["phones"] = phones
+                self._cache["bert_features"] = bert_features
+                self._cache["norm_text"] = norm_text
+        
         return self._cache
