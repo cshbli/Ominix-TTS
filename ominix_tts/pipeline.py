@@ -54,29 +54,60 @@ class NO_PROMPT_ERROR(Exception):
     pass
 
 
-def set_seed(seed:int):
-    seed = int(seed)
-    seed = seed if seed != -1 else random.randint(0, 2**32 - 1)
-    print(f"Set seed to {seed}")
+def set_seed(seed: int) -> int:
+    """
+    Set random seeds for reproducibility across all random number generators.
+    
+    Args:
+        seed: Integer seed value. If -1, a random seed will be generated.
+        
+    Returns:
+        The actual seed used (either the provided seed or a generated one)
+    
+    Note:
+        This sets seeds for Python's random module, NumPy, and PyTorch
+        (including CUDA if available).
+    """
+    # Convert to integer and handle special case
+    try:
+        seed = int(seed)
+    except (ValueError, TypeError):
+        print(f"Warning: Invalid seed value '{seed}', using random seed instead")
+        seed = random.randint(0, 2**32 - 1)
+        
+    # Generate random seed if requested
+    if seed == -1:
+        seed = random.randint(0, 2**32 - 1)
+        
+    print(f"Setting seed to {seed}")
+    
+    # Set environment variable for potential subprocesses
     os.environ['PYTHONHASHSEED'] = str(seed)
+    
+    # Set seeds for core random number generators
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    try:
-        if torch.cuda.is_available():
+    
+    # Handle CUDA-specific seeding
+    if torch.cuda.is_available():
+        try:
             torch.cuda.manual_seed(seed)
             torch.cuda.manual_seed_all(seed)
-            # torch.backends.cudnn.deterministic = True
-            # torch.backends.cudnn.benchmark = False
-            # torch.backends.cudnn.enabled = True
-            # 开启后会影响精度
+            
+            # Control precision settings
             torch.backends.cuda.matmul.allow_tf32 = False
             torch.backends.cudnn.allow_tf32 = False
-    except:
-        pass
+            
+            # Note: We keep these commented as they impact performance
+            # torch.backends.cudnn.deterministic = True
+            # torch.backends.cudnn.benchmark = False
+        except Exception as e:
+            print(f"Warning: CUDA seed setting failed with error: {str(e)}")
+    
     return seed
 
-class TTS_Config:
+class TTSConfiguration:
     default_configs={
         "v1":{
                 "device": "cpu",
@@ -122,28 +153,10 @@ class TTS_Config:
     # "auto",#多语种启动切分识别语种
     # "auto_yue",#多语种启动切分识别语种
 
-    def __init__(self, configs: Union[dict, str]=None):
+    def __init__(self, version: str = "v2"):
 
-        # 设置默认配置文件路径
-        # configs_base_path:str = "MOTTS/configs/"
-        # os.makedirs(configs_base_path, exist_ok=True)
-        # self.configs_path:str = os.path.join(configs_base_path, "tts_infer.yaml")
-
-        if configs in ["", None]:
-            # if not os.path.exists(self.configs_path):
-            #     self.save_configs()
-            #     print(f"Create default config file at {self.configs_path}")
-            configs:dict = deepcopy(self.default_configs)
-
-        if isinstance(configs, str):
-            self.configs_path = configs
-            configs:dict = self._load_configs(self.configs_path)
-
-        assert isinstance(configs, dict)
-        version = configs.get("version", "v2").lower()
-        assert version in ["v1", "v2", "v3"]
-        self.default_configs[version] = configs.get(version, self.default_configs[version])
-        self.configs:dict = configs.get("custom", deepcopy(self.default_configs[version]))
+        assert version in ["v1", "v2", "v3"]        
+        self.configs = self.default_configs[version]
 
         self.device = self.configs.get("device", torch.device("cpu"))
         if "cuda" in str(self.device) and not torch.cuda.is_available():
@@ -205,27 +218,9 @@ class TTS_Config:
 
 
 
-    def _load_configs(self, configs_path: str)->dict:
-        if os.path.exists(configs_path):
-            ...
-        else:
-            print(i18n("路径不存在,使用默认配置"))
-            self.save_configs(configs_path)
-        with open(configs_path, 'r', encoding='utf-8') as f:
-            configs = yaml.load(f, Loader=yaml.FullLoader)
+    
 
-        return configs
-
-    def save_configs(self, configs_path:str=None)->None:
-        configs=deepcopy(self.default_configs)
-        if self.configs is not None:
-            configs["custom"] = self.update_configs()
-
-        if configs_path is None:
-            configs_path = self.configs_path
-        with open(configs_path, 'w') as f:
-            yaml.dump(configs, f)
-
+    
     def update_configs(self):
         self.config = {
             "device"             : str(self.device),
@@ -257,15 +252,13 @@ class TTS_Config:
         return hash(self.configs_path)
 
     def __eq__(self, other):
-        return isinstance(other, TTS_Config) and self.configs_path == other.configs_path
+        return isinstance(other, TTSConfiguration) and self.configs_path == other.configs_path
 
 
 class MPipeline:
-    def __init__(self, configs: Union[dict, str, TTS_Config] = None):
-        if isinstance(configs, TTS_Config):
-            self.configs = configs
-        else:
-            self.configs:TTS_Config = TTS_Config(configs)
+    def __init__(self, version: str = "v2"):
+        
+        self.configs = TTSConfiguration(version)
 
         self.t2s_model:Text2SemanticLightningModule = None
         self.vits_model:Union[SynthesizerTrn, SynthesizerTrnV3] = None
@@ -418,8 +411,7 @@ class MPipeline:
 
     def init_t2s_weights(self, weights_path: str):
         print(f"Loading Text2Semantic weights from {weights_path}")
-        self.configs.t2s_weights_path = weights_path
-        # self.configs.save_configs()
+        self.configs.t2s_weights_path = weights_path        
         self.configs.hz = 50
         dict_s1 = torch.load(weights_path, map_location=self.configs.device, weights_only=False)
         config = dict_s1["config"]
@@ -762,4 +754,3 @@ class MPipeline:
         finally:
             # Clean up resources
             self.empty_cache()
-
