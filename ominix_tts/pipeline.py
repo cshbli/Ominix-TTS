@@ -389,89 +389,7 @@ class MPipeline:
         self.bert_model = self.bert_model.to(self.configs.device)
         if self.configs.is_half and str(self.configs.device)!="cpu":
             self.bert_model = self.bert_model.half()
-
-    def init_vits_weights(self, weights_path: str):
-        
-        self.configs.vits_weights_path = weights_path
-        version, model_version, if_lora_v3=get_sovits_version_from_path_fast(weights_path)
-        path_sovits_v3=self.configs.DEFAULT_CONFIGS["v3"]["vits_weights_path"]
-
-        if if_lora_v3==True and os.path.exists(path_sovits_v3)==False:
-            info= path_sovits_v3 + i18n("SoVITS V3 底模缺失，无法加载相应 LoRA 权重")
-            raise FileExistsError(info)
-
-        # dict_s2 = torch.load(weights_path, map_location=self.configs.device,weights_only=False)
-        dict_s2 = load_sovits_new(weights_path)        
-
-        hps = dict_s2["config"]
-
-        hps["model"]["semantic_frame_rate"] = "25hz"
-        if 'enc_p.text_embedding.weight'not in dict_s2['weight']:
-            hps["model"]["version"] = "v2"#v3model,v2sybomls
-        elif dict_s2['weight']['enc_p.text_embedding.weight'].shape[0] == 322:
-            hps["model"]["version"] = "v1"
-        else:
-            hps["model"]["version"] = "v2"
-        # version = hps["model"]["version"]
-
-        self.configs.filter_length = hps["data"]["filter_length"]
-        self.configs.segment_size = hps["train"]["segment_size"]
-        self.configs.sampling_rate = hps["data"]["sampling_rate"]
-        self.configs.hop_length = hps["data"]["hop_length"]
-        self.configs.win_length = hps["data"]["win_length"]
-        self.configs.n_speakers = hps["data"]["n_speakers"]
-        self.configs.semantic_frame_rate = hps["model"]["semantic_frame_rate"]
-        kwargs = hps["model"]
-        # print(f"self.configs.sampling_rate:{self.configs.sampling_rate}")
-
-        self.configs.update_version(model_version)
-
-        print(f"model_version:{model_version}")
-        # print(f'hps["model"]["version"]:{hps["model"]["version"]}')
-        if model_version!="v3":
-            vits_model = SynthesizerTrn(
-                self.configs.filter_length // 2 + 1,
-                self.configs.segment_size // self.configs.hop_length,
-                n_speakers=self.configs.n_speakers,
-                **kwargs
-            )
-            self.configs.is_v3_synthesizer = False
-        else:
-            vits_model = SynthesizerTrnV3(
-                self.configs.filter_length // 2 + 1,
-                self.configs.segment_size // self.configs.hop_length,
-                n_speakers=self.configs.n_speakers,
-                **kwargs
-            )
-            self.configs.is_v3_synthesizer = True
-            # self.init_bigvgan()
-            if "pretrained" not in weights_path and hasattr(vits_model, "enc_q"):
-                del vits_model.enc_q
-
-        if if_lora_v3==False:
-            print(f"Loading VITS weights from {weights_path}. {vits_model.load_state_dict(dict_s2['weight'], strict=False)}")
-        else:
-            print(f"Loading VITS pretrained weights from {weights_path}. {vits_model.load_state_dict(load_sovits_new(path_sovits_v3)['weight'], strict=False)}")
-            lora_rank=dict_s2["lora_rank"]
-            lora_config = LoraConfig(
-                target_modules=["to_k", "to_q", "to_v", "to_out.0"],
-                r=lora_rank,
-                lora_alpha=lora_rank,
-                init_lora_weights=True,
-            )
-            vits_model.cfm = get_peft_model(vits_model.cfm, lora_config)
-            print(f"Loading LoRA weights from {weights_path}. {vits_model.load_state_dict(dict_s2['weight'], strict=False)}")
-            
-            vits_model.cfm = vits_model.cfm.merge_and_unload()
-
-
-        vits_model = vits_model.to(self.configs.device)
-        vits_model = vits_model.eval()
-
-        self.vits_model = vits_model
-        if self.configs.is_half and str(self.configs.device)!="cpu":
-            self.vits_model = self.vits_model.half()
-
+    
     def init_t2s_weights(self, weights_path: str) -> None:
         """
         Initialize Text-to-Semantic model weights from checkpoint file
@@ -533,6 +451,140 @@ class MPipeline:
         except Exception as e:
             self.t2s_model = None
             raise RuntimeError(f"Failed to load Text2Semantic model: {str(e)}") from e
+        
+    def init_vits_weights(self, weights_path: str) -> None:
+        """
+        Initialize VITS model weights from checkpoint file
+        
+        This function loads SoVITS model weights from the specified path,
+        determines the model version, configures audio parameters, and sets up
+        the appropriate synthesizer model with the weights.
+        
+        Args:
+            weights_path: Path to the SoVITS model checkpoint file
+            
+        Raises:
+            FileNotFoundError: If weights file or required base model is missing
+            RuntimeError: If there's an issue loading the model weights
+        """
+        # Validate path exists
+        if not os.path.exists(weights_path):
+            raise FileNotFoundError(f"VITS weights not found at: {weights_path}")
+            
+        print(f"Loading VITS weights from {weights_path}")
+        self.configs.vits_weights_path = weights_path
+        
+        try:
+            # Get model version and LoRA status
+            version, model_version, is_lora_v3 = get_sovits_version_from_path_fast(weights_path)
+
+            # For LoRA models, verify base model exists
+            path_sovits_v3 = self.configs.DEFAULT_CONFIGS["v3"]["vits_weights_path"]
+            if is_lora_v3 and not os.path.exists(path_sovits_v3):
+                raise FileNotFoundError(
+                    f"{path_sovits_v3} - {i18n('SoVITS V3 底模缺失，无法加载相应 LoRA 权重')}"
+                )
+                
+            # Load model weights
+            dict_s2 = load_sovits_new(weights_path)
+            hps = dict_s2["config"]
+            
+            # Set semantic frame rate
+            hps["model"]["semantic_frame_rate"] = "25hz"
+            
+            # Determine model version from weights
+            if 'enc_p.text_embedding.weight' not in dict_s2['weight']:
+                hps["model"]["version"] = "v2"  # v3 model, v2 symbols
+            elif dict_s2['weight']['enc_p.text_embedding.weight'].shape[0] == 322:
+                hps["model"]["version"] = "v1"
+            else:
+                hps["model"]["version"] = "v2"
+                
+            # Update configuration with model parameters
+            self._update_audio_config_from_hps(hps)
+            self.configs.update_version(model_version)
+
+            kwargs = hps["model"]
+            
+            print(f"model_version:{model_version}")
+            # Initialize appropriate model based on version
+            if model_version != "v3":
+                """Create a V2 SynthesizerTrn model"""
+                self.configs.is_v3_synthesizer = False
+                vits_model = SynthesizerTrn(
+                    self.configs.filter_length // 2 + 1,
+                    self.configs.segment_size // self.configs.hop_length,
+                    n_speakers=self.configs.n_speakers,
+                    **kwargs
+                )
+            else:
+                vits_model = self._create_v3_model(hps["model"], weights_path)
+                """Create a V3 SynthesizerTrnV3 model"""
+                self.configs.is_v3_synthesizer = True
+                vits_model = SynthesizerTrnV3(
+                    self.configs.filter_length // 2 + 1,
+                    self.configs.segment_size // self.configs.hop_length,
+                    n_speakers=self.configs.n_speakers,
+                    **kwargs
+                )                
+                self.init_bigvgan()
+                if "pretrained" not in weights_path and hasattr(vits_model, "enc_q"):
+                    del vits_model.enc_q
+                
+            # Load weights into model
+            self._load_weights_into_model(vits_model, dict_s2, is_lora_v3, path_sovits_v3)
+            
+            # Finalize model setup
+            vits_model = vits_model.to(self.configs.device).eval()
+            self.vits_model = vits_model
+            
+            # Apply half precision if needed
+            if self.configs.is_half and str(self.configs.device) != "cpu":
+                self.vits_model = self.vits_model.half()
+                
+        except Exception as e:
+            self.vits_model = None
+            raise RuntimeError(f"Failed to load VITS model: {str(e)}") from e
+            
+    def _update_audio_config_from_hps(self, hps):
+        """Update audio configuration parameters from model hyperparameters"""
+        self.configs.filter_length = hps["data"]["filter_length"]
+        self.configs.segment_size = hps["train"]["segment_size"]
+        self.configs.sampling_rate = hps["data"]["sampling_rate"]
+        self.configs.hop_length = hps["data"]["hop_length"]
+        self.configs.win_length = hps["data"]["win_length"]
+        self.configs.n_speakers = hps["data"]["n_speakers"]
+        self.configs.semantic_frame_rate = hps["model"]["semantic_frame_rate"]
+
+    def _load_weights_into_model(self, vits_model, dict_s2, is_lora_v3, path_sovits_v3):
+        """Load weights into the model, handling LoRA if necessary"""
+        if not is_lora_v3:
+            # Standard weights loading
+            result = vits_model.load_state_dict(dict_s2['weight'], strict=False)
+            print(f"Loaded VITS weights with result: {result}")
+        else:
+            # LoRA weights loading
+            # First load base model
+            base_weights = load_sovits_new(path_sovits_v3)['weight']
+            result = vits_model.load_state_dict(base_weights, strict=False)
+            print(f"Loaded VITS base model with result: {result}")
+            
+            # Then apply LoRA
+            lora_rank = dict_s2["lora_rank"]
+            lora_config = LoraConfig(
+                target_modules=["to_k", "to_q", "to_v", "to_out.0"],
+                r=lora_rank,
+                lora_alpha=lora_rank,
+                init_lora_weights=True,
+            )
+            
+            # Apply LoRA to the CFM module
+            vits_model.cfm = get_peft_model(vits_model.cfm, lora_config)
+            result = vits_model.load_state_dict(dict_s2['weight'], strict=False)
+            print(f"Applied LoRA weights with result: {result}")
+            
+            # Merge LoRA weights back into the model
+            vits_model.cfm = vits_model.cfm.merge_and_unload()
     
     def stop(self,):
         '''
