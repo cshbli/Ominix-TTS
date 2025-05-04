@@ -108,39 +108,49 @@ def set_seed(seed: int) -> int:
     return seed
 
 class TTSConfiguration:
-    default_configs={
-        "v1":{
-                "device": "cpu",
-                "is_half": False,
-                "version": "v1",
-                "t2s_weights_path": "MOTTS/pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232.ckpt",
-                "vits_weights_path": "MOTTS/pretrained_models/s2G488k.pth",
-                "cnhuhbert_base_path": "MOTTS/pretrained_models/chinese-hubert-base",
-                "bert_base_path": "MOTTS/pretrained_models/chinese-roberta-wwm-ext-large",
-            },
-        "v2":{
-                "device": "cpu",
-                "is_half": False,
-                "version": "v2",
-                "t2s_weights_path": "MOTTS/pretrained_models/gsv-v2final-pretrained/s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt",
-                "vits_weights_path": "MOTTS/pretrained_models/gsv-v2final-pretrained/s2G2333k.pth",
-                "cnhuhbert_base_path": "MOTTS/pretrained_models/chinese-hubert-base",
-                "bert_base_path": "MOTTS/pretrained_models/chinese-roberta-wwm-ext-large",
-            },
-        "v3":{
-                "device": "cpu",
-                "is_half": False,
-                "version": "v3",
-                "t2s_weights_path": "MOTTS/pretrained_models/s1v3.ckpt",
-                "vits_weights_path": "MOTTS/pretrained_models/s2Gv3.pth",
-                "cnhuhbert_base_path": "MOTTS/pretrained_models/chinese-hubert-base",
-                "bert_base_path": "MOTTS/pretrained_models/chinese-roberta-wwm-ext-large",
-            },
+    """
+    Configuration manager for Ominix-TTS system.
+    
+    Handles all configuration settings for model versions, paths, device settings,
+    audio parameters, and language support.
+    """
+    
+    # Class constants for better maintainability
+    REPO_ID = "cshbli/MoTTS"
+    REPO_REVISION = "main"
+    
+    # Default model paths organized by version
+    DEFAULT_CONFIGS = {
+        "v1": {
+            "device": "cpu",
+            "is_half": False,
+            "version": "v1",
+            "t2s_weights_path": "./pretrained_models/s1bert25hz-2kh-longer-epoch=68e-step=50232.ckpt",
+            "vits_weights_path": "./pretrained_models/s2G488k.pth",
+            "cnhuhbert_base_path": "./pretrained_models/chinese-hubert-base",
+            "bert_base_path": "./pretrained_models/chinese-roberta-wwm-ext-large",
+        },
+        "v2": {
+            "device": "cpu",
+            "is_half": False,
+            "version": "v2",
+            "t2s_weights_path": "./pretrained_models/gsv-v2final-pretrained/s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt",
+            "vits_weights_path": "./pretrained_models/gsv-v2final-pretrained/s2G2333k.pth",
+            "cnhuhbert_base_path": "./pretrained_models/chinese-hubert-base",
+            "bert_base_path": "./pretrained_models/chinese-roberta-wwm-ext-large",
+        },
+        "v3": {
+            "device": "cpu",
+            "is_half": False,
+            "version": "v3",
+            "t2s_weights_path": "./pretrained_models/s1v3.ckpt",
+            "vits_weights_path": "./pretrained_models/s2Gv3.pth",
+            "cnhuhbert_base_path": "./pretrained_models/chinese-hubert-base",
+            "bert_base_path": "./pretrained_models/chinese-roberta-wwm-ext-large",
+        },
     }
-    configs:dict = None
-    v1_languages:list = ["auto", "en", "zh", "ja",  "all_zh", "all_ja"]
-    v2_languages:list = ["auto", "auto_yue", "en", "zh", "ja", "yue", "ko", "all_zh", "all_ja", "all_yue", "all_ko"]
-    languages:list = v2_languages
+    
+    # Language support by version
     # "all_zh",#全部按中文识别
     # "en",#全部按英文识别#######不变
     # "all_ja",#全部按日文识别
@@ -152,95 +162,146 @@ class TTSConfiguration:
     # "ko",#按韩英混合识别####不变
     # "auto",#多语种启动切分识别语种
     # "auto_yue",#多语种启动切分识别语种
-
+    LANGUAGES = {
+        "v1": ["auto", "en", "zh", "ja", "all_zh", "all_ja"],
+        "v2": ["auto", "auto_yue", "en", "zh", "ja", "yue", "ko", "all_zh", "all_ja", "all_yue", "all_ko"]
+    }
+    
+    # Fallback model files when downloading from repository
+    FALLBACK_FILES = {
+        "t2s_weights_path": {"filename": "models/T2S/txdb-e15.ckpt"},
+        "vits_weights_path": {"filename": "models/VITS/txdb_e12_s204.pth"},
+        "bert_base_path": {"folder_path": "models/BERT/chinese-roberta-wwm-ext-large"},
+        "cnhuhbert_base_path": {"folder_path": "models/HuBERT/chinese-hubert-base"}
+    }
+    
     def __init__(self, version: str = "v2"):
-
-        assert version in ["v1", "v2", "v3"]        
-        self.configs = self.default_configs[version]
-
+        """
+        Initialize the TTS configuration.
+        
+        Args:
+            version: Model version - one of "v1", "v2", or "v3"
+        """
+        # Validate version
+        if version not in self.DEFAULT_CONFIGS:
+            raise ValueError(f"Unsupported version: {version}, must be one of {list(self.DEFAULT_CONFIGS.keys())}")
+        
+        # Set version and basic config from defaults
+        self.version = version
+        self.configs = deepcopy(self.DEFAULT_CONFIGS[version])
+        
+        # Set device configuration
+        self._setup_device()
+        
+        # Set paths
+        self._setup_paths()
+        
+        # Setup language support
+        self.languages = self.LANGUAGES["v1"] if self.version == "v1" else self.LANGUAGES["v2"]
+        
+        # Setup synthesizer flags
+        self.is_v3_synthesizer = False
+        
+        # Set audio processing parameters
+        self._setup_audio_params()
+        
+    def _setup_device(self):
+        """Configure device and precision settings"""
         self.device = self.configs.get("device", torch.device("cpu"))
         if "cuda" in str(self.device) and not torch.cuda.is_available():
-            print(f"Warning: CUDA is not available, set device to CPU.")
+            print("Warning: CUDA is not available, setting device to CPU.")
             self.device = torch.device("cpu")
-
+            
         self.is_half = self.configs.get("is_half", False)
-        # if str(self.device) == "cpu" and self.is_half:
-        #     print(f"Warning: Half precision is not supported on CPU, set is_half to False.")
-        #     self.is_half = False
-
-        self.version = version
-        self.t2s_weights_path = self.configs.get("t2s_weights_path", None)
-        self.vits_weights_path = self.configs.get("vits_weights_path", None)
-        self.bert_base_path = self.configs.get("bert_base_path", None)
-        self.cnhuhbert_base_path = self.configs.get("cnhuhbert_base_path", None)
-        self.languages = self.v1_languages if self.version=="v1" else self.v2_languages
-
-        self.is_v3_synthesizer:bool = False
-
-
-        if (self.t2s_weights_path in [None, ""]) or (not os.path.exists(self.t2s_weights_path)):
-            self.t2s_weights_path = gpt_path = hf_hub_download(
-                repo_id="cshbli/MoTTS",
-                filename="models/T2S/txdb-e15.ckpt",
-                revision="main"
-            )
-            print(f"fall back to default t2s_weights_path: {self.t2s_weights_path}")
-        if (self.vits_weights_path in [None, ""]) or (not os.path.exists(self.vits_weights_path)):
-            self.vits_weights_path = hf_hub_download(
-                repo_id="cshbli/MoTTS",
-                filename="models/VITS/txdb_e12_s204.pth",
-                revision="main"
-            )
-            print(f"fall back to default vits_weights_path: {self.vits_weights_path}")
-        if (self.bert_base_path in [None, ""]) or (not os.path.exists(self.bert_base_path)):
-            self.bert_base_path = download_folder_from_repo(    
-                repo_id="cshbli/MoTTS",
-                folder_path="models/BERT/chinese-roberta-wwm-ext-large"
-            )
-            print(f"fall back to default bert_base_path: {self.bert_base_path}")
-        if (self.cnhuhbert_base_path in [None, ""]) or (not os.path.exists(self.cnhuhbert_base_path)):
-            self.cnhuhbert_base_path = download_folder_from_repo(
-                repo_id="cshbli/MoTTS",
-                folder_path="models/HuBERT/chinese-hubert-base"
-            )
-            print(f"fall back to default cnhuhbert_base_path: {self.cnhuhbert_base_path}")
+        
+    def _setup_paths(self):
+        """Set up and validate model paths"""
+        self.t2s_weights_path = self._get_valid_path("t2s_weights_path")
+        self.vits_weights_path = self._get_valid_path("vits_weights_path")
+        self.bert_base_path = self._get_valid_path("bert_base_path")
+        self.cnhuhbert_base_path = self._get_valid_path("cnhuhbert_base_path")
+        
+        # Update configs with validated paths
         self.update_configs()
-
+        
+    def _get_valid_path(self, path_key):
+        """
+        Get a valid path for a model file or download if not available
+        
+        Args:
+            path_key: The key for the model path
+            
+        Returns:
+            Valid path to the model file
+        """
+        path = self.configs.get(path_key)
+        
+        # Check if path is valid
+        if path in [None, ""] or not os.path.exists(path):
+            # Download model if needed
+            if "filename" in self.FALLBACK_FILES[path_key]:
+                path = hf_hub_download(
+                    repo_id=self.REPO_ID,
+                    filename=self.FALLBACK_FILES[path_key]["filename"],
+                    revision=self.REPO_REVISION
+                )
+            else:
+                path = download_folder_from_repo(
+                    repo_id=self.REPO_ID,
+                    folder_path=self.FALLBACK_FILES[path_key]["folder_path"]
+                )
+            print(f"Downloaded {path_key}: {path}")
+            
+        return path
+        
+    def _setup_audio_params(self):
+        """Set up audio processing parameters with defaults"""
         self.max_sec = None
-        self.hz:int = 50
-        self.semantic_frame_rate:str = "25hz"
-        self.segment_size:int = 20480
-        self.filter_length:int = 2048
-        self.sampling_rate:int = 32000
-        self.hop_length:int = 640
-        self.win_length:int = 2048
-        self.n_speakers:int = 300
-
-
-
-    
-
-    
+        self.hz = 50
+        self.semantic_frame_rate = "25hz"
+        self.segment_size = 20480
+        self.filter_length = 2048
+        self.sampling_rate = 32000
+        self.hop_length = 640
+        self.win_length = 2048
+        self.n_speakers = 300
+        
     def update_configs(self):
+        """
+        Update the configuration dictionary with current settings
+        
+        Returns:
+            Updated configuration dictionary
+        """
         self.config = {
-            "device"             : str(self.device),
-            "is_half"            : self.is_half,
-            "version"            : self.version,
-            "t2s_weights_path"   : self.t2s_weights_path,
-            "vits_weights_path"  : self.vits_weights_path,
-            "bert_base_path"     : self.bert_base_path,
+            "device": str(self.device),
+            "is_half": self.is_half,
+            "version": self.version,
+            "t2s_weights_path": self.t2s_weights_path,
+            "vits_weights_path": self.vits_weights_path,
+            "bert_base_path": self.bert_base_path,
             "cnhuhbert_base_path": self.cnhuhbert_base_path,
         }
         return self.config
 
-    def update_version(self, version:str)->None:
+    def update_version(self, version: str) -> None:
+        """
+        Update the configuration version
+        
+        Args:
+            version: New version to use
+        """
+        if version not in self.DEFAULT_CONFIGS:
+            raise ValueError(f"Unsupported version: {version}, must be one of {list(self.DEFAULT_CONFIGS.keys())}")
+            
         self.version = version
-        self.languages = self.v1_languages if self.version=="v1" else self.v2_languages
+        self.languages = self.LANGUAGES["v1"] if version == "v1" else self.LANGUAGES["v2"]
 
     def __str__(self):
-        self.configs = self.update_configs()
-        string = "TTS Config".center(100, '-') + '\n'
-        for k, v in self.configs.items():
+        """String representation showing the configuration"""
+        config = self.update_configs()
+        string = "TTS Configuration".center(100, '-') + '\n'
+        for k, v in config.items():
             string += f"{str(k).ljust(20)}: {str(v)}\n"
         string += "-" * 100 + '\n'
         return string
@@ -249,10 +310,15 @@ class TTSConfiguration:
         return self.__str__()
 
     def __hash__(self):
-        return hash(self.configs_path)
+        # Use consistent attribute for hash
+        return hash((self.version, self.device, self.is_half))
 
     def __eq__(self, other):
-        return isinstance(other, TTSConfiguration) and self.configs_path == other.configs_path
+        if not isinstance(other, TTSConfiguration):
+            return False
+        return (self.version == other.version and
+                str(self.device) == str(other.device) and
+                self.is_half == other.is_half)
 
 
 class MPipeline:
@@ -330,7 +396,7 @@ class MPipeline:
         
         self.configs.vits_weights_path = weights_path
         version, model_version, if_lora_v3=get_sovits_version_from_path_fast(weights_path)
-        path_sovits_v3=self.configs.default_configs["v3"]["vits_weights_path"]
+        path_sovits_v3=self.configs.DEFAULT_CONFIGS["v3"]["vits_weights_path"]
 
         if if_lora_v3==True and os.path.exists(path_sovits_v3)==False:
             info= path_sovits_v3 + i18n("SoVITS V3 底模缺失，无法加载相应 LoRA 权重")
