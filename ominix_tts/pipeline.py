@@ -50,7 +50,6 @@ def speed_change(input_audio:np.ndarray, speed:float, sr:int):
 
     return processed_audio
 
-
 class NO_PROMPT_ERROR(Exception):
     pass
 
@@ -433,154 +432,98 @@ class MPipeline:
         if self.configs.is_half and str(self.configs.device)!="cpu":
             self.t2s_model = self.t2s_model.half()
     
-    def enable_half_precision(self, enable: bool = True, save: bool = True):
-        '''
-            To enable half precision for the TTS model.
-            Args:
-                enable: bool, whether to enable half precision.
-
-        '''
-        if str(self.configs.device) == "cpu" and enable:
-            print("Half precision is not supported on CPU.")
-            return
-
-        self.configs.is_half = enable
-        self.precision = torch.float16 if enable else torch.float32
-        if save:
-            self.configs.save_configs()
-        if enable:
-            if self.t2s_model is not None:
-                self.t2s_model =self.t2s_model.half()
-            if self.vits_model is not None:
-                self.vits_model = self.vits_model.half()
-            if self.bert_model is not None:
-                self.bert_model =self.bert_model.half()
-            if self.cnhuhbert_model is not None:
-                self.cnhuhbert_model = self.cnhuhbert_model.half()
-            if self.bigvgan_model is not None:
-                self.bigvgan_model = self.bigvgan_model.half()
-        else:
-            if self.t2s_model is not None:
-                self.t2s_model = self.t2s_model.float()
-            if self.vits_model is not None:
-                self.vits_model = self.vits_model.float()
-            if self.bert_model is not None:
-                self.bert_model = self.bert_model.float()
-            if self.cnhuhbert_model is not None:
-                self.cnhuhbert_model = self.cnhuhbert_model.float()
-            if self.bigvgan_model is not None:
-                self.bigvgan_model = self.bigvgan_model.float()
-
-    def set_device(self, device: torch.device, save: bool = True):
-        '''
-            To set the device for all models.
-            Args:
-                device: torch.device, the device to use for all models.
-        '''
-        self.configs.device = device
-        if save:
-            self.configs.save_configs()
-        if self.t2s_model is not None:
-            self.t2s_model = self.t2s_model.to(device)
-        if self.vits_model is not None:
-            self.vits_model = self.vits_model.to(device)
-        if self.bert_model is not None:
-            self.bert_model = self.bert_model.to(device)
-        if self.cnhuhbert_model is not None:
-            self.cnhuhbert_model = self.cnhuhbert_model.to(device)
-        if self.bigvgan_model is not None:
-            self.bigvgan_model = self.bigvgan_model.to(device)
-        if self.sr_model is not None:
-            self.sr_model = self.sr_model.to(device)    
-
-    def batch_sequences(self, sequences: List[torch.Tensor], axis: int = 0, pad_value: int = 0, max_length:int=None):
-        seq = sequences[0]
-        ndim = seq.dim()
-        if axis < 0:
-            axis += ndim
-        dtype:torch.dtype = seq.dtype
-        pad_value = torch.tensor(pad_value, dtype=dtype)
-        seq_lengths = [seq.shape[axis] for seq in sequences]
-        if max_length is None:
-            max_length = max(seq_lengths)
-        else:
-            max_length = max(seq_lengths) if max_length < max(seq_lengths) else max_length
-
-        padded_sequences = []
-        for seq, length in zip(sequences, seq_lengths):
-            padding = [0] * axis + [0, max_length - length] + [0] * (ndim - axis - 1)
-            padded_seq = torch.nn.functional.pad(seq, padding, value=pad_value)
-            padded_sequences.append(padded_seq)
-        batch = torch.stack(padded_sequences)
-        return batch
-    
     def stop(self,):
         '''
         Stop the inference process.
         '''
         self.stop_flag = True
 
-
+    def empty_cache(self):
+        try:
+            gc.collect() # 触发gc的垃圾回收。避免内存一直增长。
+            if "cuda" in str(self.configs.device):
+                torch.cuda.empty_cache()
+            elif str(self.configs.device) == "mps":
+                torch.mps.empty_cache()
+        except:
+            pass
+    
+    """ This decorator is used to optimize the performance of the inference function by disabling gradient calculation during inference. 
+    When using this decorator: 
+        1. Forward pass operations don't track gradients 
+        2. Memory usage is reduced significantly 
+        3. Computation is faster since PyTorch doesn't build the computational graph needed for backpropagation
+    """
     @torch.no_grad()
-    def run(self, inputs:dict):
+    def __call__(self, 
+        text: str,   # input text
+        text_language: str,  # select "en", "all_zh", "all_ja"
+        ref_audio_path: str,  # reference audio path          
+        ref_text: str = "",     # reference text
+        ref_language: str = "all_zh",  # reference text language
+        ref_text_free: bool = False, # whether to use reference text
+        aux_ref_audio_paths: list = [],
+        batch_size: int = 100,             # inference batch size
+        speed_factor: float = 1.0, # control speed of output audio
+        top_k: int = 5,
+        top_p: float = 1,
+        temperature: float = 1,
+        text_split_method: str = "cut4", #"cut0": not cut   "cut1": 4 sentences a cut   "cut2": 50 words a cut   "cut3": cut at chinese '。'  "cut4": cut at english '.'   "cut5": auto cut
+        split_bucket: bool = True,
+        return_fragment: bool = False,
+        fragment_interval: float = 0.07,   # interval between every sentence
+        seed: int = 233333,
+        repetition_penalty: float = 1.35,  # repetition penalty for T2S model
+        sample_steps: int = 32,            # number of sampling steps for VITS model V3
+        super_sampling: bool = False,       # whether to use super-sampling for audio
+        parallel_infer: bool = True,       # whether to use parallel inference
+        batch_threshold: float = 0.75     # threshold for batch splitting
+        ):
         """
-        Text to speech inference.
-
+        Text to speech synthesis with voice cloning
+        
         Args:
-            inputs (dict):
-                {
-                    "text": "",                   # str.(required) text to be synthesized
-                    "text_lang: "",               # str.(required) language of the text to be synthesized
-                    "ref_audio_path": "",         # str.(required) reference audio path
-                    "aux_ref_audio_paths": [],    # list.(optional) auxiliary reference audio paths for multi-speaker tone fusion
-                    "prompt_text": "",            # str.(optional) prompt text for the reference audio
-                    "prompt_lang": "",            # str.(required) language of the prompt text for the reference audio
-                    "top_k": 5,                   # int. top k sampling
-                    "top_p": 1,                   # float. top p sampling
-                    "temperature": 1,             # float. temperature for sampling
-                    "text_split_method": "cut0",  # str. text split method, see text_segmentation_method.py for details.
-                    "batch_size": 1,              # int. batch size for inference
-                    "batch_threshold": 0.75,      # float. similarity_threshold for batch splitting.
-                    "split_bucket: True,          # bool. whether to split the batch into multiple buckets.
-                    "return_fragment": False,     # bool. step by step return the audio fragment.
-                    "speed_factor":1.0,           # float. control the speed of the synthesized audio.
-                    "fragment_interval":0.3,      # float. to control the interval of the audio fragment.
-                    "seed": -1,                   # int. random seed for reproducibility.
-                    "parallel_infer": True,       # bool. whether to use parallel inference.
-                    "repetition_penalty": 1.35    # float. repetition penalty for T2S model.
-                    "sample_steps": 32,           # int. number of sampling steps for VITS model V3.
-                    "super_sampling": False,       # bool. whether to use super-sampling for audio when using VITS model V3.
-                }
-        returns:
-            Tuple[int, np.ndarray]: sampling rate and audio data.
+            text: Text to be synthesized
+            text_language: Language of the text ("en", "all_zh", "all_ja", etc.)
+            ref_audio_path: Path to reference audio for voice cloning
+            ref_text: Optional text corresponding to reference audio
+            ref_language: Language of reference text
+            ref_text_free: Whether to ignore reference text
+            aux_ref_audio_paths: Additional reference audio paths for voice fusion
+            batch_size: Inference batch size
+            speed_factor: Control speed of output audio
+            top_k: Top-k sampling parameter
+            top_p: Top-p sampling parameter
+            temperature: Temperature for sampling
+            text_split_method: Method for text segmentation
+            split_bucket: Whether to use similar-length text bucketing
+            return_fragment: Whether to return audio fragments sequentially
+            fragment_interval: Interval between fragments in seconds
+            seed: Random seed for reproducibility
+            repetition_penalty: Penalty for repeated tokens in semantic generation
+            sample_steps: Sampling steps for V3 model generation
+            super_sampling: Whether to use super-sampling for V3 models
+            parallel_infer: Whether to use parallel inference
+            batch_threshold: Similarity threshold for batch splitting
+            
+        Yields:
+            Tuple[int, np.ndarray]: Sample rate and audio data
         """
-        ########## variables initialization ###########
-        self.stop_flag:bool = False
-        text:str = inputs.get("text", "")
-        text_lang:str = inputs.get("text_lang", "")
-        assert text_lang in self.configs.languages
-        ref_audio_path:str = inputs.get("ref_audio_path", "")
-        aux_ref_audio_paths:list = inputs.get("aux_ref_audio_paths", [])
-        prompt_text:str = inputs.get("prompt_text", "")
-        prompt_lang:str = inputs.get("prompt_lang", "")
-        top_k:int = inputs.get("top_k", 5)
-        top_p:float = inputs.get("top_p", 1)
-        temperature:float = inputs.get("temperature", 1)
-        text_split_method:str = inputs.get("text_split_method", "cut0")
-        batch_size = inputs.get("batch_size", 1)
-        batch_threshold = inputs.get("batch_threshold", 0.75)
-        speed_factor = inputs.get("speed_factor", 1.0)
-        split_bucket = inputs.get("split_bucket", True)
-        return_fragment = inputs.get("return_fragment", False)
-        fragment_interval = inputs.get("fragment_interval", 0.3)
-        seed = inputs.get("seed", -1)
-        seed = -1 if seed in ["", None] else seed
-        actual_seed = set_seed(seed)
-        parallel_infer = inputs.get("parallel_infer", True)
-        repetition_penalty = inputs.get("repetition_penalty", 1.35)
-        sample_steps = inputs.get("sample_steps", 32)
-        super_sampling = inputs.get("super_sampling", False)
+        # Initialize stop flag
+        self.stop_flag = False
+        
+        # Process input parameters
+        prompt_text = ref_text if not ref_text_free else ""
+        prompt_lang = ref_language
+        
+        # Set random seed for reproducibility
+        actual_seed = seed if seed not in [-1, "", None] else random.randrange(1 << 32)
+        set_seed(actual_seed)
+        
+        # Validate language
+        assert text_language in self.configs.languages
 
+        # Configure inference mode
         if parallel_infer:
             print(i18n("并行推理模式已开启"))
             self.t2s_model.model.infer_panel = self.t2s_model.model.infer_panel_batch_infer
@@ -588,15 +531,17 @@ class MPipeline:
             print(i18n("并行推理模式已关闭"))
             self.t2s_model.model.infer_panel = self.t2s_model.model.infer_panel_naive_batched
 
+        # Configure fragment mode
         if return_fragment:
             print(i18n("分段返回模式已开启"))
             if split_bucket:
                 split_bucket = False
                 print(i18n("分段返回模式不支持分桶处理，已自动关闭分桶处理"))
 
-        if split_bucket and speed_factor==1.0 and not (self.configs.is_v3_synthesizer and parallel_infer):
+        # Configure bucketing
+        if split_bucket and speed_factor == 1.0 and not (self.configs.is_v3_synthesizer and parallel_infer):
             print(i18n("分桶处理模式已开启"))
-        elif speed_factor!=1.0:
+        elif speed_factor != 1.0:
             print(i18n("语速调节不支持分桶处理，已自动关闭分桶处理"))
             split_bucket = False
         elif self.configs.is_v3_synthesizer and parallel_infer:
@@ -605,63 +550,75 @@ class MPipeline:
         else:
             print(i18n("分桶处理模式已关闭"))
 
-        if fragment_interval<0.01:
+        # Validate fragment interval
+        if fragment_interval < 0.01:
             fragment_interval = 0.01
-            print(i18n("分段间隔过小，已自动设置为0.01"))        
+            print(i18n("分段间隔过小，已自动设置为0.01"))
         
-        print("############ Reference Audio/Text Processing ############")
-        t_ref_start = time.perf_counter()
         try:
+            # Process reference audio and text
+            print("############ Reference Audio/Text Processing ############")
+            t_ref_start = time.perf_counter()
+            
+            # Check if prompt text is required for V3 models
             no_prompt_text = prompt_text in [None, ""]
             if not no_prompt_text:
                 assert prompt_lang in self.configs.languages
             if no_prompt_text and self.configs.is_v3_synthesizer:
                 raise NO_PROMPT_ERROR("prompt_text cannot be empty when using SoVITS_V3")
             
+            # Process reference audio and prompt text
             self.prompt_cache = self.reference_processor.process_reference(
                 ref_audio_path=ref_audio_path,
                 prompt_text=prompt_text,
-                prompt_lang=prompt_lang,                
+                prompt_lang=prompt_lang,
                 model_version=self.configs.version,
                 aux_ref_audio_paths=aux_ref_audio_paths
             )
-        except Exception as e:
-            print(f"Error processing reference audio: {str(e)}")
-            raise e            
-        
-        t_ref_end = time.perf_counter()
-        t_reference = t_ref_end - t_ref_start
-        print(f"Reference audio processing time: {t_reference:.3f} seconds")
+            
+            t_ref_end = time.perf_counter()
+            t_reference = t_ref_end - t_ref_start
+            print(f"Reference audio processing time: {t_reference:.3f} seconds")
 
-        ###### text preprocessing ########        
-        data:list = None
-        if not return_fragment:
-            data = self.text_preprocessor.process(text, text_lang, text_split_method, self.configs.version)
-            if len(data) == 0:
-                yield 16000, np.zeros(int(16000), dtype=np.int16)
-                return
+            # Text preprocessing
+            print("############ Text Preprocessing ############")
+            t_text_start = time.perf_counter()
+            
+            data = None
+            batch_index_list = None
+            
+            if not return_fragment:
+                # Process complete text
+                data = self.text_preprocessor.process(text, text_language, text_split_method, self.configs.version)
+                if len(data) == 0:
+                    yield 16000, np.zeros(int(16000), dtype=np.int16)
+                    return
 
-            batch_index_list:list = None
-            data, batch_index_list = self.text_preprocessor.create_inference_batches(data,
-                                prompt_data=self.prompt_cache if not no_prompt_text else None,
-                                batch_size=batch_size,
-                                similarity_threshold=batch_threshold,
-                                split_bucket=split_bucket)
-        else:
-            print(f'############ {i18n("切分文本")} ############')
-            texts = self.text_preprocessor.pre_seg_text(text, text_lang, text_split_method)
-            data = []
-            for i in range(len(texts)):
-                if i%batch_size == 0:
-                    data.append([])
-                data[-1].append(texts[i])
+                # Create inference batches
+                data, batch_index_list = self.text_preprocessor.create_inference_batches(
+                    data,
+                    prompt_data=self.prompt_cache if not no_prompt_text else None,
+                    batch_size=batch_size,
+                    similarity_threshold=batch_threshold,
+                    split_bucket=split_bucket
+                )
+            else:
+                # Prepare text for fragment mode
+                print(f'############ {i18n("切分文本")} ############')
+                texts = self.text_preprocessor.pre_seg_text(text, text_language, text_split_method)
+                data = []
+                for i in range(len(texts)):
+                    if i % batch_size == 0:
+                        data.append([])
+                    data[-1].append(texts[i])
+            
+            t_text_end = time.perf_counter()
+            print(f"Text preprocessing time: {t_text_end - t_text_start:.3f} seconds")
 
-        t2 = time.perf_counter()
-        try:
+            # semantic and synthesis
             print("############ 推理 ############")
-            ###### inference ######
-            t_34 = 0.0
-            t_45 = 0.0
+            t_semantic = 0.0
+            t_synthesis = 0.0
             audio = []
             output_sr = self.configs.sampling_rate if not self.configs.is_v3_synthesizer else 24000
 
@@ -673,12 +630,15 @@ class MPipeline:
             synthesizer = create_synthesizer(self.vits_model, self.configs, self.prompt_cache)
             audio_processor = AudioProcessor(self.configs, self.sr_model)
 
+            # Process each batch
             for item in data:
-                t3 = time.perf_counter()
+                t_sem_start = time.perf_counter()
+                
+                # Process text fragments in fragment mode
                 if return_fragment:
                     item = self.text_preprocessor.process_text_fragments(
                         item,
-                        text_lang,
+                        text_language,
                         batch_size,
                         batch_threshold,
                         version=self.configs.version,
@@ -687,28 +647,30 @@ class MPipeline:
                     if item is None:
                         continue
 
-                batch_phones:List[torch.LongTensor] = item["phones"]
-                # batch_phones:torch.LongTensor = item["phones"]
-                batch_phones_len:torch.LongTensor = item["phones_len"]
-                all_phoneme_ids:torch.LongTensor = item["all_phones"]
-                all_phoneme_lens:torch.LongTensor  = item["all_phones_len"]
-                all_bert_features:torch.LongTensor = item["all_bert_features"]
-                norm_text:str = item["norm_text"]
+                # Extract batch data
+                batch_phones = item["phones"]
+                batch_phones_len = item["phones_len"]
+                all_phoneme_ids = item["all_phones"]
+                all_phoneme_lens = item["all_phones_len"]
+                all_bert_features = item["all_bert_features"]
+                norm_text = item["norm_text"]
                 max_len = item["max_len"]
 
                 print(i18n("前端处理后的文本(每句):"), norm_text)
-                if no_prompt_text :
+                
+                # Prepare prompt for semantic generation
+                if no_prompt_text:
                     prompt = None
                 else:
                     prompt = self.prompt_cache["prompt_semantic"].expand(len(all_phoneme_ids), -1).to(self.configs.device)
 
+                # Generate semantic tokens
                 print(f"############ {i18n('预测语义Token')} ############")
                 pred_semantic_list, idx_list = self.t2s_model.model.infer_panel(
                     all_phoneme_ids,
                     all_phoneme_lens,
                     prompt,
                     all_bert_features,
-                    # prompt_phone_len=ph_offset,
                     top_k=top_k,
                     top_p=top_p,
                     temperature=temperature,
@@ -716,12 +678,20 @@ class MPipeline:
                     max_len=max_len,
                     repetition_penalty=repetition_penalty,
                 )
-                t4 = time.perf_counter()
-                t_34 += t4 - t3
-
-                refer_audio_spec:torch.Tensor = [item.to(dtype=self.precision, device=self.configs.device) for item in self.prompt_cache["refer_spec"]]                
                 
+                t_sem_end = time.perf_counter()
+                t_semantic += t_sem_end - t_sem_start
+
+                # Prepare reference spectrogram for synthesis
+                refer_audio_spec = [
+                    item.to(dtype=self.precision, device=self.configs.device) 
+                    for item in self.prompt_cache["refer_spec"]
+                ]
+                
+                # Synthesize audio
+                t_synth_start = time.perf_counter()
                 print(f"############ {i18n('合成音频')} ############")
+                
                 batch_audio_fragment = synthesizer.synthesize(
                     pred_semantic_list,
                     batch_phones,
@@ -732,10 +702,15 @@ class MPipeline:
                     sample_steps=sample_steps
                 )
 
-                t5 = time.perf_counter()
-                t_45 += t5 - t4
+                t_synth_end = time.perf_counter()
+                t_synthesis += t_synth_end - t_synth_start
+                
+                # Process audio output
                 if return_fragment:
-                    print("%.3f\t%.3f\t%.3f\t%.3f" % (t_ref_end - t_ref_start, t2 - t_ref_end, t4 - t3, t5 - t4))
+                    # Return audio fragments individually
+                    print(f"Time breakdown: Ref={t_reference:.3f}s, Text={t_text_end - t_text_start:.3f}s, " +
+                        f"Semantic={t_semantic:.3f}s, Synthesis={t_synthesis:.3f}s")
+                        
                     yield audio_processor.process_audio_batches(
                         [batch_audio_fragment],
                         output_sr,
@@ -746,14 +721,19 @@ class MPipeline:
                         super_sampling and self.configs.is_v3_synthesizer
                     )
                 else:
+                    # Collect audio for complete processing
                     audio.append(batch_audio_fragment)
 
+                # Check if process should be stopped
                 if self.stop_flag:
                     yield 16000, np.zeros(int(16000), dtype=np.int16)
                     return
 
+            # Process complete audio in non-fragment mode
             if not return_fragment:
-                print("%.3f\t%.3f\t%.3f\t%.3f" % (t_ref_end - t_ref_start, t2 - t_ref_end, t_34, t_45))
+                print(f"Time breakdown: Ref={t_reference:.3f}s, Text={t_text_end - t_text_start:.3f}s, " +
+                    f"Semantic={t_semantic:.3f}s, Synthesis={t_synthesis:.3f}s")
+                    
                 if len(audio) == 0:
                     yield 16000, np.zeros(int(16000), dtype=np.int16)
                     return
@@ -767,70 +747,19 @@ class MPipeline:
                     fragment_interval,
                     super_sampling and self.configs.is_v3_synthesizer
                 )
+                
         except Exception as e:
             traceback.print_exc()
-            # 必须返回一个空音频, 否则会导致显存不释放。
+            # Return empty audio to prevent memory leak
             yield 16000, np.zeros(int(16000), dtype=np.int16)
-            # 重置模型, 否则会导致显存释放不完全。
+            # Reset models to avoid incomplete memory cleanup
             del self.t2s_model
             del self.vits_model
             self.t2s_model = None
             self.vits_model = None
-            self.init_t2s_weights(self.configs.t2s_weights_path)
-            self.init_vits_weights(self.configs.vits_weights_path)
             raise e
+            
         finally:
+            # Clean up resources
             self.empty_cache()
-
-    def empty_cache(self):
-        try:
-            gc.collect() # 触发gc的垃圾回收。避免内存一直增长。
-            if "cuda" in str(self.configs.device):
-                torch.cuda.empty_cache()
-            elif str(self.configs.device) == "mps":
-                torch.mps.empty_cache()
-        except:
-            pass
-    
-    def __call__(self, 
-            text:str,   # input text
-            text_language:str,  # select "en", "all_zh", "all_ja"
-            ref_audio_path:str,  # reference audio path          
-            ref_text:str="",     # reference text
-            ref_language:str="all_zh",  # reference text language
-            ref_text_free:bool=False, # whether to use reference text
-            aux_ref_audio_paths:list=[],
-            batch_size:int=100,             # inference batch size
-            speed_factor:float=1.0, # control speed of output audio
-            top_k:int=5,
-            top_p:float=1,
-            temperature:float=1,
-            text_split_method:str="cut4", #"cut0": not cut   "cut1": 4 sentences a cut   "cut2": 50 words a cut   "cut3": cut at chinese '。'  "cut4": cut at english '.'   "cut5": auto cut
-            split_bucket:bool=True,
-            return_fragment:bool=False,
-            fragment_interval:float=0.07,   # interval between every sentence
-            seed:int=233333
-            ):
-        
-        actual_seed = seed if seed not in [-1, "", None] else random.randrange(1 << 32)
-        inputs = {
-            "text": text,
-            "text_lang": text_language,
-            "ref_audio_path": ref_audio_path,
-            "prompt_text": ref_text if not ref_text_free else "",
-            "prompt_lang": ref_language,
-            "top_k": top_k,
-            "top_p": top_p,
-            "temperature": temperature,
-            "text_split_method": text_split_method,
-            "batch_size": batch_size,
-            "speed_factor": speed_factor,
-            "split_bucket": split_bucket,
-            "return_fragment": return_fragment,
-            "fragment_interval": fragment_interval,
-            "seed": actual_seed,
-        }
-        print(inputs)
-
-        return self.run(inputs)
 
