@@ -49,8 +49,11 @@ class TextPreprocessor:
     phoneme conversion, and BERT feature extraction.
     """
 
-    def __init__(self, bert_model: AutoModelForMaskedLM,
-                 tokenizer: AutoTokenizer, device: torch.device):
+    def __init__(self, 
+                 bert_model: AutoModelForMaskedLM,
+                 tokenizer: AutoTokenizer, 
+                 device: torch.device=torch.device("cpu"),
+                 precision: torch.dtype = torch.float32):
         """
         Initialize TextPreprocessor with BERT model and tokenizer
         
@@ -58,10 +61,12 @@ class TextPreprocessor:
             bert_model: BERT model for feature extraction
             tokenizer: Tokenizer for the BERT model
             device: Device to run model inference on
+            precision: Floating point precision for tensors
         """
         self.bert_model = bert_model
         self.tokenizer = tokenizer
         self.device = device
+        self.precision = precision
         self.bert_lock = threading.RLock()
 
     def process(self, text: str, lang: str, text_split_method: str, version: str = "v2") -> List[Dict]:
@@ -398,3 +403,191 @@ class TextPreprocessor:
                 result[-1] += text
                 
         return result
+    
+    def create_inference_batches(self, 
+                                 processed_texts:list,
+                                 prompt_data:dict=None,
+                                 batch_size:int=5,
+                                 similarity_threshold:float=0.75,
+                                 split_bucket:bool=True
+                                 ):
+        """
+        Create optimized inference batches for TTS processing
+        
+        Organizes processed text into batches for efficient inference,
+        with optional length-based bucketing to group similar-length texts.
+        
+        Args:
+            processed_texts: List of dictionaries with processed text
+            prompt_data: Optional reference voice data for voice cloning
+            batch_size: Maximum number of texts in a batch
+            similarity_threshold: Threshold for length similarity in bucketing
+            split_bucket: Whether to use length-based bucketing            
+            
+        Returns:
+            Tuple containing:
+            - List of batches with tensors ready for inference
+            - List of batch indices mapping to original processed_texts
+        """
+        # Early return for empty input
+        if not processed_texts:
+            return [], []
+            
+        # Track batches and indices
+        batches = []
+        batch_indices = []
+        
+        # Create index-length pairs for sorting
+        index_and_len_list = []
+        for idx, item in enumerate(processed_texts):
+            norm_text_len = len(item["norm_text"])
+            index_and_len_list.append([idx, norm_text_len])
+
+        # Organize items into batches based on bucketing strategy
+        if split_bucket:
+            # Sort texts by length for more efficient batching
+            index_and_len_list.sort(key=lambda x: x[1])
+            index_and_len_list = np.array(index_and_len_list, dtype=np.int64)
+            
+            batch_index_list_len = 0
+            pos = 0
+            while pos < index_and_len_list.shape[0]:
+                pos_end = min(pos + batch_size, index_and_len_list.shape[0])
+                while pos < pos_end:
+                    # Calculate homogeneity score based on median length
+                    batch = index_and_len_list[pos:pos_end, 1].astype(np.float32)
+                    score = batch[(pos_end - pos) // 2] / (batch.mean() + 1e-8)
+                    
+                    # Accept batch if homogeneous enough or can't split further
+                    if (score >= similarity_threshold) or (pos_end - pos == 1):
+                        batch_index = index_and_len_list[pos:pos_end, 0].tolist()
+                        batch_index_list_len += len(batch_index)
+                        batch_indices.append(batch_index)
+                        pos = pos_end
+                        break
+                        
+                    # Try a smaller batch
+                    pos_end = pos_end - 1
+                    
+            # Verify all items are processed
+            assert batch_index_list_len == len(processed_texts)
+        else:
+            # Simple sequential batching without length consideration
+            for i in range(0, len(processed_texts), batch_size):
+                batch_indices.append([j for j in range(i, min(i + batch_size, len(processed_texts)))])
+
+        # Process each batch to prepare tensors
+        for batch_idx, index_list in enumerate(batch_indices):
+            # Get items for this batch
+            item_list = [processed_texts[idx] for idx in index_list]
+            
+            # Initialize collection lists
+            phones_list = []
+            phones_len_list = []
+            all_phones_list = []
+            all_phones_len_list = []
+            all_bert_features_list = []
+            norm_text_batch = []
+            
+            # Track maximum sequence lengths
+            all_bert_max_len = 0
+            all_phones_max_len = 0
+            
+            # Process each item in batch
+            for item in item_list:
+                # Handle prompt concatenation if provided
+                if prompt_data is not None:
+                    all_bert_features = torch.cat(
+                        [prompt_data["bert_features"], item["bert_features"]], 1
+                    ).to(dtype=self.precision, device=self.device)
+                    
+                    all_phones = torch.LongTensor(prompt_data["phones"] + item["phones"]).to(self.device)
+                    phones = torch.LongTensor(item["phones"]).to(self.device)
+                else:
+                    all_bert_features = item["bert_features"].to(dtype=self.precision, device=self.device)
+                    phones = torch.LongTensor(item["phones"]).to(self.device)
+                    all_phones = phones
+                
+                # Update maximum lengths for padding
+                all_bert_max_len = max(all_bert_max_len, all_bert_features.shape[-1])
+                all_phones_max_len = max(all_phones_max_len, all_phones.shape[-1])
+                
+                # Store processed tensors and metadata
+                phones_list.append(phones)
+                phones_len_list.append(phones.shape[-1])
+                all_phones_list.append(all_phones)
+                all_phones_len_list.append(all_phones.shape[-1])
+                all_bert_features_list.append(all_bert_features)
+                norm_text_batch.append(item["norm_text"])
+            
+            # Use maximum of both lengths
+            max_len = max(all_bert_max_len, all_phones_max_len)
+            
+            # Create batch dictionary with all needed tensors
+            batch = {
+                "phones": phones_list,
+                "phones_len": torch.LongTensor(phones_len_list).to(self.device),
+                "all_phones": all_phones_list,
+                "all_phones_len": torch.LongTensor(all_phones_len_list).to(self.device),
+                "all_bert_features": all_bert_features_list,
+                "norm_text": norm_text_batch,
+                "max_len": max_len,
+            }
+            batches.append(batch)
+        
+        return batches, batch_indices
+    
+    def process_text_fragments(self, fragment_batch, text_lang, batch_size, similarity_threshold, version, no_prompt_text=False):
+        """
+        Process a batch of text fragments for TTS synthesis
+        
+        This function takes a batch of text fragments, extracts phonetic and BERT features
+        for each fragment, and organizes them into a batch for inference.
+        
+        Args:
+            fragment_batch: List of text fragments to process
+            text_lang: Language code for the text
+            batch_size: Maximum number of fragments in a batch
+            similarity_threshold: Threshold for length similarity in bucketing
+            version: Model version
+            no_prompt_text: Whether to exclude prompt data from batch creation
+            
+        Returns:
+            Processed batch ready for inference, or None if no valid fragments
+        """
+        batch_data = []
+        print(f'############ {i18n("提取文本Bert特征")} ############')
+        
+        # Process each text fragment
+        for text in tqdm(fragment_batch):
+            # Extract features
+            phones, bert_features, norm_text = self.segment_and_extract_feature_for_text(
+                text, text_lang, version
+            )
+            
+            # Skip invalid fragments
+            if phones is None:
+                continue
+                
+            # Store features
+            batch_data.append({
+                "phones": phones,
+                "bert_features": bert_features,
+                "norm_text": norm_text,
+            })
+        
+        # Return None if no valid fragments
+        if len(batch_data) == 0:
+            return None
+        
+        # Create batch for inference
+        batches, _ = self.create_inference_batches(
+            batch_data,
+            prompt_data=self.prompt_cache if not no_prompt_text else None,
+            batch_size=batch_size,
+            similarity_threshold=similarity_threshold,
+            split_bucket=False
+        )
+        
+        return batches[0] if batches else None
+    
