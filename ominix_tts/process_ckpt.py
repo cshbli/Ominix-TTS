@@ -98,79 +98,54 @@ def get_sovits_version_from_path_fast(sovits_path):
         model_version = "v3"
     return version,model_version,if_lora_v3
 
-# def load_sovits_new(sovits_path):
-#     f=open(sovits_path,"rb")
-#     meta=f.read(2)
-#     if meta!="PK":
-#         data = b'PK' + f.read()
-#         bio = BytesIO()
-#         bio.write(data)
-#         bio.seek(0)
-#         return torch.load(bio, map_location="cpu", weights_only=False)
-#     return torch.load(sovits_path,map_location="cpu", weights_only=False)
-
 def load_sovits_new(sovits_path):
-    # Try with direct module mapping as fallback
-    sys.modules['utils'] = importlib.import_module('ominix_tts.utils')
+    """
+    Load SoVITS checkpoint with module path resolution
+    
+    This function loads a SoVITS checkpoint and handles potential module mapping issues,
+    especially for checkpoints that reference 'utils' instead of 'ominix_tts.utils'.
+    
+    Args:
+        sovits_path: Path to the SoVITS model checkpoint
+        
+    Returns:
+        Loaded model weights dictionary
+    """
+    # Store original utils module if it exists
+    original_utils = sys.modules.get('utils', None)
+    
     try:
-        f=open(sovits_path,"rb")
-        meta=f.read(2)
-        if meta!="PK":
-            data = b'PK' + f.read()
-            bio = BytesIO()
-            bio.write(data)
-            bio.seek(0)
-            return torch.load(bio, map_location="cpu", weights_only=False)
-        return torch.load(sovits_path,map_location="cpu", weights_only=False)
+        # Try to import ominix_tts.utils
+        try:
+            ominix_utils = importlib.import_module('ominix_tts.utils')
+            sys.modules['utils'] = ominix_utils
+        except ImportError:
+            # If ominix_tts.utils doesn't exist, keep original utils or do nothing
+            pass
+        
+        # Process file header and load checkpoint
+        with open(sovits_path, "rb") as f:
+            meta = f.read(2)
+            f.seek(0)  # Reset file position
+            
+            if meta != b'PK':
+                # Handle non-standard headers
+                f.seek(2)  # Skip the first two bytes
+                data = b'PK' + f.read()
+                bio = BytesIO(data)
+                return torch.load(bio, map_location="cpu", weights_only=False)
+            else:
+                # Standard header
+                return torch.load(sovits_path, map_location="cpu", weights_only=False)
+    
+    except Exception as e:
+        print(f"Error loading checkpoint: {str(e)}")
+        raise
+        
     finally:
-        if 'utils' in sys.modules and sys.modules['utils'].__name__ == 'ominix_tts.utils':
+        # Restore the original utils module if it existed
+        if original_utils is not None:
+            sys.modules['utils'] = original_utils
+        elif 'utils' in sys.modules and sys.modules['utils'].__name__ == 'ominix_tts.utils':
+            # Only remove if we added it
             del sys.modules['utils']
-
-
-# # Custom pickle module with module redirection
-# class CustomPickleModule:
-#     @staticmethod
-#     def Unpickler(file):
-#         return CustomUnpickler(file)
-    
-#     @staticmethod
-#     def load(file):
-#         return CustomUnpickler(file).load()
-    
-#     # Include other pickle functions that torch might use
-#     dumps = pickle.dumps
-#     dump = pickle.dump
-#     loads = pickle.loads
-
-# class CustomUnpickler(pickle.Unpickler):
-#     def find_class(self, module, name):
-#         # Remap 'utils' to 'ominix_tts.utils'
-#         if module == 'utils':
-#             module = 'ominix_tts.utils'
-#         return super().find_class(module, name)
-
-# def load_sovits_new(sovits_path):
-#     try:
-#         with open(sovits_path, "rb") as f:
-#             meta = f.read(2)
-#             if meta != b'PK':
-#                 # Handle other non-standard headers
-#                 data = b'PK' + f.read()
-#                 bio = BytesIO()
-#                 bio.write(data)
-#                 bio.seek(0)
-#                 return torch.load(bio, map_location="cpu", weights_only=False, 
-#                                 pickle_module=CustomPickleModule)
-#             else:
-#                 # Standard header
-#                 return torch.load(sovits_path, map_location="cpu", weights_only=False, 
-#                                 pickle_module=CustomPickleModule)
-#     except Exception as e:
-#         print(f"Error loading checkpoint: {e}")
-#         # Try with direct module mapping as fallback
-#         sys.modules['utils'] = importlib.import_module('ominix_tts.utils')
-#         try:
-#             return torch.load(sovits_path, map_location="cpu", weights_only=False)
-#         finally:
-#             if 'utils' in sys.modules and sys.modules['utils'].__name__ == 'ominix_tts.utils':
-#                 del sys.modules['utils']    
