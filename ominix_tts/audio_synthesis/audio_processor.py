@@ -1,7 +1,6 @@
 import torch
 import numpy as np
-from typing import List, Tuple, Union
-import torchaudio
+from typing import List, Tuple
 
 class AudioProcessor:
     """Handle audio post-processing and super-resolution operations"""

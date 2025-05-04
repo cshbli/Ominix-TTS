@@ -311,11 +311,9 @@ class MPipeline:
 
         self._init_models()
 
-        self.text_processor:TextProcessor = \
-                            TextProcessor(self.bert_model,
+        self.text_processor:TextProcessor = TextProcessor(self.bert_model,
                                           self.bert_tokenizer,
                                           self.configs.device)
-
 
         self.prompt_cache:dict = {
             "ref_audio_path" : None,
@@ -328,7 +326,6 @@ class MPipeline:
             "norm_text"      : None,
             "aux_ref_audio_paths": [],
         }
-
 
         self.stop_flag:bool = False
         self.precision:torch.dtype = torch.float16 if self.configs.is_half else torch.float32
@@ -528,62 +525,7 @@ class MPipeline:
         if self.bigvgan_model is not None:
             self.bigvgan_model = self.bigvgan_model.to(device)
         if self.sr_model is not None:
-            self.sr_model = self.sr_model.to(device)
-        
-
-    def set_ref_audio(self, ref_audio_path:str):
-        '''
-            To set the reference audio for the TTS model,
-                including the prompt_semantic and refer_spepc.
-            Args:
-                ref_audio_path: str, the path of the reference audio.
-        '''        
-        self.prompt_cache["prompt_semantic"] = extract_reference_semantic(ref_audio_path, self.configs.device, self.configs.sampling_rate,
-                                self.cnhuhbert_model, self.vits_model, self.configs.is_half)         
-        self._set_ref_spec(ref_audio_path)
-        self._set_ref_audio_path(ref_audio_path)
-
-    def _set_ref_audio_path(self, ref_audio_path):
-        self.prompt_cache["ref_audio_path"] = ref_audio_path
-
-    def _set_ref_spec(self, ref_audio_path):
-        # spec = self._get_ref_spec(ref_audio_path)
-        spec, self.prompt_cache["raw_audio"], self.prompt_cache["raw_sr"] = extract_reference_spectrogram(ref_audio_path, self.configs.device,
-                                self.configs.filter_length,
-                                self.configs.sampling_rate,
-                                self.configs.hop_length,
-                                self.configs.win_length,
-                                self.configs.is_half)
-        if self.prompt_cache["refer_spec"] in [[],None]:
-            self.prompt_cache["refer_spec"]=[spec]
-        else:
-            self.prompt_cache["refer_spec"][0] = spec
-
-    def _get_ref_spec(self, ref_audio_path):
-        raw_audio, raw_sr = torchaudio.load(ref_audio_path)
-        raw_audio=raw_audio.to(self.configs.device).float()
-        self.prompt_cache["raw_audio"] = raw_audio
-        self.prompt_cache["raw_sr"] = raw_sr
-
-        audio = load_audio(ref_audio_path, int(self.configs.sampling_rate))
-        audio = torch.FloatTensor(audio)
-        maxx=audio.abs().max()
-        if(maxx>1):audio/=min(2,maxx)
-        audio_norm = audio
-        audio_norm = audio_norm.unsqueeze(0)
-        spec = spectrogram_torch(
-            audio_norm,
-            self.configs.filter_length,
-            self.configs.sampling_rate,
-            self.configs.hop_length,
-            self.configs.win_length,
-            center=False,
-        )
-        spec = spec.to(self.configs.device)
-        if self.configs.is_half:
-            spec = spec.half()
-        return spec
-
+            self.sr_model = self.sr_model.to(device)    
 
     def batch_sequences(self, sequences: List[torch.Tensor], axis: int = 0, pad_value: int = 0, max_length:int=None):
         seq = sequences[0]
@@ -748,6 +690,7 @@ class MPipeline:
         self.stop_flag:bool = False
         text:str = inputs.get("text", "")
         text_lang:str = inputs.get("text_lang", "")
+        assert text_lang in self.configs.languages
         ref_audio_path:str = inputs.get("ref_audio_path", "")
         aux_ref_audio_paths:list = inputs.get("aux_ref_audio_paths", [])
         prompt_text:str = inputs.get("prompt_text", "")
@@ -797,63 +740,57 @@ class MPipeline:
         if fragment_interval<0.01:
             fragment_interval = 0.01
             print(i18n("分段间隔过小，已自动设置为0.01"))
+        
 
+        
+        
+        
+        print("############ Reference Audio Processing ############")
+        t_ref_start = time.perf_counter()
         no_prompt_text = False
         if prompt_text in [None, ""]:
-            no_prompt_text = True
-
-        assert text_lang in self.configs.languages
+            no_prompt_text = True        
         if not no_prompt_text:
             assert prompt_lang in self.configs.languages
-
         if no_prompt_text and self.configs.is_v3_synthesizer:
             raise NO_PROMPT_ERROR("prompt_text cannot be empty when using SoVITS_V3")
+        
+        # Instantiate the reference processor if not already created
+        if not hasattr(self, "reference_processor"):
+            from .reference_processor.processor import ReferenceProcessor
+            self.reference_processor = ReferenceProcessor(
+                self.cnhuhbert_model, 
+                self.vits_model, 
+                self.configs.device, 
+                self.configs
+            )
+        
+        # Process reference audio
+        try:
+            prompt_data = self.reference_processor.process_reference_audio(
+                ref_audio_path, 
+                aux_ref_audio_paths
+            )
+            
+            # Process prompt text if provided
+            if not no_prompt_text:
+                prompt_data = self.reference_processor.process_reference_text(
+                    prompt_text,
+                    prompt_lang,
+                    self.text_processor,
+                    self.configs.version
+                )
+            
+            # Store the processed data in prompt_cache for backward compatibility
+            self.prompt_cache = prompt_data
+        except Exception as e:
+            print(f"Error processing reference audio: {str(e)}")            
+        
+        t_ref_end = time.perf_counter()
+        t_reference = t_ref_end - t_ref_start
+        print(f"Reference audio processing time: {t_reference:.3f} seconds")
 
-        if ref_audio_path in [None, ""] and \
-            ((self.prompt_cache["prompt_semantic"] is None) or (self.prompt_cache["refer_spec"] in [None, []])):
-            raise ValueError("ref_audio_path cannot be empty, when the reference audio is not set using set_ref_audio()")
-
-        ###### setting reference audio and prompt text preprocessing ########
-        t0 = time.perf_counter()
-        if (ref_audio_path is not None) and (ref_audio_path != self.prompt_cache["ref_audio_path"]):
-            if not os.path.exists(ref_audio_path):
-                raise ValueError(f"{ref_audio_path} not exists")
-            self.set_ref_audio(ref_audio_path)
-
-        aux_ref_audio_paths = aux_ref_audio_paths if aux_ref_audio_paths is not None else []
-        paths = set(aux_ref_audio_paths)&set(self.prompt_cache["aux_ref_audio_paths"])
-        if not (len(list(paths)) == len(aux_ref_audio_paths) == len(self.prompt_cache["aux_ref_audio_paths"])):
-            self.prompt_cache["aux_ref_audio_paths"] = aux_ref_audio_paths
-            self.prompt_cache["refer_spec"] = [self.prompt_cache["refer_spec"][0]]
-            for path in aux_ref_audio_paths:
-                if path in [None, ""]:
-                    continue
-                if not os.path.exists(path):
-                    print(i18n("音频文件不存在，跳过："), path)
-                    continue
-                self.prompt_cache["refer_spec"].append(self._get_ref_spec(path))
-
-        if not no_prompt_text:
-            prompt_text = prompt_text.strip("\n")
-            if (prompt_text[-1] not in splits): prompt_text += "。" if prompt_lang != "en" else "."
-            print(i18n("实际输入的参考文本:"), prompt_text)
-            if self.prompt_cache["prompt_text"] != prompt_text:
-                phones, bert_features, norm_text = \
-                    self.text_processor.segment_and_extract_feature_for_text(
-                                                                        prompt_text,
-                                                                        prompt_lang,
-                                                                        self.configs.version)
-                self.prompt_cache["prompt_text"] = prompt_text
-                self.prompt_cache["prompt_lang"] = prompt_lang
-                self.prompt_cache["phones"] = phones
-                self.prompt_cache["bert_features"] = bert_features
-                self.prompt_cache["norm_text"] = norm_text
-
-
-
-
-        ###### text preprocessing ########
-        t1 = time.perf_counter()
+        ###### text preprocessing ########        
         data:list = None
         if not return_fragment:
             data = self.text_processor.process(text, text_lang, text_split_method, self.configs.version)
@@ -977,7 +914,7 @@ class MPipeline:
                 t5 = time.perf_counter()
                 t_45 += t5 - t4
                 if return_fragment:
-                    print("%.3f\t%.3f\t%.3f\t%.3f" % (t1 - t0, t2 - t1, t4 - t3, t5 - t4))
+                    print("%.3f\t%.3f\t%.3f\t%.3f" % (t_ref_end - t_ref_start, t2 - t_ref_end, t4 - t3, t5 - t4))
                     yield audio_processor.process_audio_batches(
                         [batch_audio_fragment],
                         output_sr,
@@ -995,7 +932,7 @@ class MPipeline:
                     return
 
             if not return_fragment:
-                print("%.3f\t%.3f\t%.3f\t%.3f" % (t1 - t0, t2 - t1, t_34, t_45))
+                print("%.3f\t%.3f\t%.3f\t%.3f" % (t_ref_end - t_ref_start, t2 - t_ref_end, t_34, t_45))
                 if len(audio) == 0:
                     yield 16000, np.zeros(int(16000), dtype=np.int16)
                     return
