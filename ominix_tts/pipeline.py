@@ -17,7 +17,6 @@ from .AR.models.t2s_lightning_module import Text2SemanticLightningModule
 from .feature_extractor.cnhubert import CNHubert
 from .module.models import SynthesizerTrn, SynthesizerTrnV3
 from .tools.i18n.i18n import I18nAuto, scan_language_list
-from .text_processor.text_segmentation import splits
 from .text_processor.processor import TextPreprocessor
 from .reference_processor.processor import ReferenceProcessor
 from .process_ckpt import get_sovits_version_from_path_fast, load_sovits_new
@@ -321,74 +320,76 @@ class TTSConfiguration:
 
 class MPipeline:
     def __init__(self, version: str = "v2"):
+        """
+        Initialize the TTS pipeline with all required models
         
+        Sets up the configuration and loads all necessary models for text-to-speech synthesis
+        with voice cloning capabilities.
+        
+        Args:
+            version: Model version to use ("v1", "v2", or "v3")
+        
+        Raises:
+            ValueError: If an invalid version is provided
+            FileNotFoundError: If required model files cannot be found
+        """
+        # Initialize configuration
         self.configs = TTSConfiguration(version)
-
-        self.t2s_model:Text2SemanticLightningModule = None
-        self.vits_model:Union[SynthesizerTrn, SynthesizerTrnV3] = None
-        self.bert_tokenizer:AutoTokenizer = None
-        self.bert_model:AutoModelForMaskedLM = None
-        self.cnhuhbert_model:CNHubert = None
-        self.sr_model:AP_BWE = None
-        self.sr_model_not_exist:bool = False
-
-        self.stop_flag:bool = False
-        self.precision:torch.dtype = torch.float16 if self.configs.is_half else torch.float32
-
-        self._init_models()
-
-        self.text_preprocessor:TextPreprocessor = TextPreprocessor(
+        
+        # Initialize model placeholders
+        self.t2s_model = None
+        self.vits_model = None
+        self.bert_tokenizer = None
+        self.bert_model = None 
+        self.cnhuhbert_model = None
+        self.sr_model = None
+        self.sr_model_not_exist = False
+        
+        # Set inference parameters
+        self.stop_flag = False
+        self.precision = torch.float16 if self.configs.is_half else torch.float32
+        
+        # Load all models
+        print("Initializing TTS pipeline models...")
+        
+        # Load core models in order of dependency
+        self.init_bert_weights(self.configs.bert_base_path)
+        self.init_cnhuhbert_weights(self.configs.cnhuhbert_base_path)
+        self.init_t2s_weights(self.configs.t2s_weights_path)
+        self.init_vits_weights(self.configs.vits_weights_path)
+        
+        # Initialize text preprocessor with loaded models
+        self.text_preprocessor = TextPreprocessor(
             self.bert_model,
             self.bert_tokenizer,
             self.configs.device,
             self.precision
         )
         
-        self.reference_processor:ReferenceProcessor = ReferenceProcessor(
-                self.text_preprocessor,
-                self.cnhuhbert_model, 
-                self.vits_model, 
-                self.configs.device, 
-                self.configs
+        # Initialize reference processor with loaded models
+        self.reference_processor = ReferenceProcessor(
+            self.text_preprocessor,
+            self.cnhuhbert_model, 
+            self.vits_model, 
+            self.configs.device, 
+            self.configs
         )
-
-        self.prompt_cache:dict = {
-            "ref_audio_path" : None,
+        
+        # Initialize empty prompt cache
+        self.prompt_cache = {
+            "ref_audio_path": None,
             "prompt_semantic": None,
-            "refer_spec"     : [],
-            "prompt_text"    : None,
-            "prompt_lang"    : None,
-            "phones"         : None,
-            "bert_features"  : None,
-            "norm_text"      : None,
+            "refer_spec": [],
+            "prompt_text": None,
+            "prompt_lang": None,
+            "phones": None,
+            "bert_features": None,
+            "norm_text": None,
             "aux_ref_audio_paths": [],
         }
-
-    def _init_models(self,):
-        self.init_t2s_weights(self.configs.t2s_weights_path)        
-        self.init_vits_weights(self.configs.vits_weights_path)        
-        self.init_bert_weights(self.configs.bert_base_path)        
-        self.init_cnhuhbert_weights(self.configs.cnhuhbert_base_path)
         
-
-    def init_cnhuhbert_weights(self, base_path: str):
-        print(f"Loading CNHuBERT weights from {base_path}")
-        self.cnhuhbert_model = CNHubert(base_path)
-        self.cnhuhbert_model=self.cnhuhbert_model.eval()
-        self.cnhuhbert_model = self.cnhuhbert_model.to(self.configs.device)
-        if self.configs.is_half and str(self.configs.device)!="cpu":
-            self.cnhuhbert_model = self.cnhuhbert_model.half()
-
-
-
-    def init_bert_weights(self, base_path: str):
-        print(f"Loading BERT weights from {base_path}")
-        self.bert_tokenizer = AutoTokenizer.from_pretrained(base_path)
-        self.bert_model = AutoModelForMaskedLM.from_pretrained(base_path)
-        self.bert_model=self.bert_model.eval()
-        self.bert_model = self.bert_model.to(self.configs.device)
-        if self.configs.is_half and str(self.configs.device)!="cpu":
-            self.bert_model = self.bert_model.half()
+        print(f"Pipeline initialized with {version} models on {self.configs.device}")    
+    
     
     def init_t2s_weights(self, weights_path: str) -> None:
         """
@@ -561,7 +562,7 @@ class MPipeline:
         if not is_lora_v3:
             # Standard weights loading
             result = vits_model.load_state_dict(dict_s2['weight'], strict=False)
-            print(f"Loaded VITS weights with result: {result}")
+            # print(f"Loaded VITS weights with result: {result}")
         else:
             # LoRA weights loading
             # First load base model
@@ -585,6 +586,90 @@ class MPipeline:
             
             # Merge LoRA weights back into the model
             vits_model.cfm = vits_model.cfm.merge_and_unload()
+
+    def init_bert_weights(self, base_path: str) -> None:
+        """
+        Initialize BERT model weights and tokenizer
+        
+        This function loads a pre-trained BERT model and tokenizer from the specified path,
+        configures them for inference, and sets them up on the appropriate device with
+        proper precision settings.
+        
+        Args:
+            base_path: Path to the pre-trained BERT model directory
+            
+        Raises:
+            FileNotFoundError: If the BERT model directory doesn't exist
+            RuntimeError: If there's an issue loading the model or tokenizer
+        """
+        # Validate path exists
+        if not os.path.exists(base_path):
+            raise FileNotFoundError(f"BERT model not found at: {base_path}")
+            
+        print(f"Loading BERT weights from {base_path}")
+        
+        try:
+            # Load tokenizer with optimized settings
+            self.bert_tokenizer = AutoTokenizer.from_pretrained(base_path)
+            
+            # Load model with optimized settings for inference
+            self.bert_model = AutoModelForMaskedLM.from_pretrained(base_path)
+            
+            # Set model to evaluation mode
+            self.bert_model = self.bert_model.eval()
+            
+            # Move model to appropriate device
+            self.bert_model = self.bert_model.to(self.configs.device)
+            
+            # Apply half precision if requested (for GPU only)
+            if self.configs.is_half and str(self.configs.device) != "cpu":
+                self.bert_model = self.bert_model.half()
+                
+        except Exception as e:
+            # Clean up resources in case of failure
+            self.bert_model = None
+            self.bert_tokenizer = None
+            raise RuntimeError(f"Failed to load BERT model: {str(e)}") from e
+        
+    def init_cnhuhbert_weights(self, base_path: str) -> None:
+        """
+        Initialize CNHuBERT model weights for language feature extraction
+        
+        This function loads the CNHuBERT model from the specified path and sets it up
+        for inference on the appropriate device with the correct precision settings.
+        CNHuBERT is used for extracting acoustic features from reference audio.
+        
+        Args:
+            base_path: Path to the CNHuBERT model directory
+            
+        Raises:
+            FileNotFoundError: If the model directory doesn't exist
+            RuntimeError: If there's an issue loading the model
+        """
+        # Validate path exists
+        if not os.path.exists(base_path):
+            raise FileNotFoundError(f"CNHuBERT model not found at: {base_path}")
+            
+        print(f"Loading CNHuBERT weights from {base_path}")
+        
+        try:
+            # Initialize model
+            self.cnhuhbert_model = CNHubert(base_path)
+            
+            # Set model to evaluation mode
+            self.cnhuhbert_model = self.cnhuhbert_model.eval()
+            
+            # Move model to appropriate device
+            self.cnhuhbert_model = self.cnhuhbert_model.to(self.configs.device)
+            
+            # Apply half precision if requested (for GPU only)
+            if self.configs.is_half and str(self.configs.device) != "cpu":
+                self.cnhuhbert_model = self.cnhuhbert_model.half()
+                
+        except Exception as e:
+            # Clean up resources in case of failure
+            self.cnhuhbert_model = None
+            raise RuntimeError(f"Failed to load CNHuBERT model: {str(e)}") from e
     
     def stop(self,):
         '''
