@@ -76,8 +76,7 @@ flowchart TD
     
     B -->|No| H{Is path different from cached path?}
     
-    H -->|Yes| I[Extract primary reference]
-    I --> I1[Extract semantic tokens]
+    H -->|Yes| I1[Extract semantic tokens]    
     I1 --> I2[Extract spectrogram]
     I2 --> L[Process auxiliary references]   
     
@@ -88,18 +87,17 @@ flowchart TD
     
     E --> Q    
     
-    Q -->|Yes| W[Process prompt text]
-    W --> W1[Extract phones, bert features]
-    W1 --> R[Return cache]
-
-    
-
+    Q -->|Yes| W[Extract phones, bert features]    
+    W --> R[Return cache]
     Q -->|No| R[Return cache]    
     
     R --> Z[End process_reference]
+
+    classDef CoreProcess fill:#f9f,stroke:#333,stroke-width:2px;
+    class I1,I2,W CoreProcess
 ```    
  
-## Clean Reinstall package during development
+## Clean reinstall package during development
 ```
 # 1. Uninstall the package
 pip uninstall -y ominix-tts
