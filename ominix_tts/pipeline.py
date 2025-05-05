@@ -26,6 +26,58 @@ language=os.environ.get("language","Auto")
 language=sys.argv[-1] if sys.argv[-1] in scan_language_list() else language
 i18n = I18nAuto(language=language)
 
+def get_text_split_method(text_language: str, provided_method: str = "") -> str:
+    """
+    Determine the appropriate text split method based on language and user preference.
+    
+    This function selects a text splitting strategy based on the input language when
+    no specific method is provided. For English, it defaults to sentence-based splitting,
+    while for other languages it uses automatic splitting.
+    
+    Args:
+        text_language: The language of the text ("en", "all_zh", "all_ja", etc.)
+        provided_method: User-provided split method (empty string if none provided)
+        
+    Returns:
+        The text split method to use
+        
+    Note:
+        Available methods:
+        - "cut0": No splitting
+        - "cut1": Split after every 4 sentences
+        - "cut2": Split after every 50 words
+        - "cut3": Split at Chinese period ("。")
+        - "cut4": Split at English period (".")
+        - "cut5": Automatic language-specific splitting
+
+        Supported languages:
+        # "all_zh",#全部按中文识别
+        # "en",#全部按英文识别#######不变
+        # "all_ja",#全部按日文识别
+        # "all_yue",#全部按中文识别
+        # "all_ko",#全部按韩文识别
+        # "zh",#按中英混合识别####不变
+        # "ja",#按日英混合识别####不变
+        # "yue",#按粤英混合识别####不变
+        # "ko",#按韩英混合识别####不变
+        # "auto",#多语种启动切分识别语种
+        # "auto_yue",#多语种启动切分识别语种
+    """
+    # If a method is provided, use it
+    if provided_method is not None and provided_method != "":
+        return provided_method
+        
+    # Otherwise, select based on language
+    text_language = text_language.lower()
+    
+    if "en" in text_language:
+        return "cut4"  # English period-based splitting
+    elif "zh" in text_language or "yue" in text_language:
+        return "cut3"  # Chinese period-based splitting
+    else:
+        return "cut5"  # Automatic language-specific splitting
+
+
 def speed_change(input_audio:np.ndarray, speed:float, sr:int):
     # 将 NumPy 数组转换为原始 PCM 流
     raw_audio = input_audio.astype(np.int16).tobytes()
@@ -148,17 +200,6 @@ class TTSConfiguration:
     }
     
     # Language support by version
-    # "all_zh",#全部按中文识别
-    # "en",#全部按英文识别#######不变
-    # "all_ja",#全部按日文识别
-    # "all_yue",#全部按中文识别
-    # "all_ko",#全部按韩文识别
-    # "zh",#按中英混合识别####不变
-    # "ja",#按日英混合识别####不变
-    # "yue",#按粤英混合识别####不变
-    # "ko",#按韩英混合识别####不变
-    # "auto",#多语种启动切分识别语种
-    # "auto_yue",#多语种启动切分识别语种
     LANGUAGES = {
         "v1": ["auto", "en", "zh", "ja", "all_zh", "all_ja"],
         "v2": ["auto", "auto_yue", "en", "zh", "ja", "yue", "ko", "all_zh", "all_ja", "all_yue", "all_ko"]
@@ -687,6 +728,7 @@ class MPipeline:
         except:
             pass
     
+    
     """ This decorator is used to optimize the performance of the inference function by disabling gradient calculation during inference. 
     When using this decorator: 
         1. Forward pass operations don't track gradients 
@@ -707,7 +749,7 @@ class MPipeline:
         top_k: int = 5,
         top_p: float = 1,
         temperature: float = 1,
-        text_split_method: str = "cut4", #"cut0": not cut   "cut1": 4 sentences a cut   "cut2": 50 words a cut   "cut3": cut at chinese '。'  "cut4": cut at english '.'   "cut5": auto cut
+        text_split_method: str = "", 
         split_bucket: bool = True,
         return_fragment: bool = False,
         fragment_interval: float = 0.07,   # interval between every sentence
@@ -734,7 +776,7 @@ class MPipeline:
             top_k: Top-k sampling parameter
             top_p: Top-p sampling parameter
             temperature: Temperature for sampling
-            text_split_method: Method for text segmentation
+            text_split_method: Method for text segmentation (if empty, will be determined by language)
             split_bucket: Whether to use similar-length text bucketing
             return_fragment: Whether to return audio fragments sequentially
             fragment_interval: Interval between fragments in seconds
@@ -754,6 +796,9 @@ class MPipeline:
         # Process input parameters
         prompt_text = ref_text if not ref_text_free else ""
         prompt_lang = ref_language
+
+        # Set text_split_method based on language if not provided
+        text_split_method = get_text_split_method(text_language, text_split_method)
         
         # Set random seed for reproducibility
         actual_seed = seed if seed not in [-1, "", None] else random.randrange(1 << 32)
