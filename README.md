@@ -45,16 +45,52 @@ Ideal for creating audiobooks, virtual assistants, accessibility tools, content 
 
 ## Usage
 
-1. Please install `ffmpeg`. ffmpeg is used to decode the reference audio file. 
+1. Installation
+    - Please install `ffmpeg`. ffmpeg is used to decode the reference audio file. 
+        - For MacOS:
+        ```
+        brew install ffmpeg 
+        ```
 
-    - For MacOS:
+    - Recommend to create one virtual environment to run tests and examples
     ```
-    brew install ffmpeg 
+    conda create -n TTS python=3.9
+    conda activate TTS
     ```
 
-2. Recommend to create one virtual environment to run tests and examples
+    - Install the Ominix-TTS package
+    ```
+    pip install ominix-tts
+    ```
 
-```
-conda create -n TTS python=3.9
-conda activate TTS
-```
+2. Run a simple example with the default reference voice. For the first time run, it will take a little bit longer time since the models will be downloaded and cached locally.
+    ```
+    python examples/test_with_reference.py
+    ```
+    
+    The `test_with_reference.py` file:
+    ```
+    import soundfile as sf
+
+    from ominix_tts import MPipeline
+
+    pipeline = MPipeline()
+
+    text = "This is a sample text for testing Ominix TTS voice synthesis."
+
+    # Using the default reference audio and text
+    result_generator = pipeline(text=text, text_language="en")
+
+    # Process the generated audio
+    results = []
+    for item in result_generator:
+        results.append(item)
+
+    # Write output
+    sf.write('output.wav', results[0][1], samplerate=results[0][0], subtype='PCM_16')
+    ```
+
+3. Run a simple example with provided reference voice.
+    ```
+    python examples/test_with_reference.py
+    ```

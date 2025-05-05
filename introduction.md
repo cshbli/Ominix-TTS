@@ -113,3 +113,29 @@ pip cache purge
 # 4. Reinstall
 pip install .
 ```
+
+## Build Distribution file for PyPI
+
+- Install build tools
+```
+pip install build
+```
+
+- Build source and wheel distributions
+```
+python -m build
+```
+
+- This creates a `dist/` folder with `.tar.gz` and `.whl` files.
+
+## Publish to PyPI
+
+- Create a PyPI account
+- Install Twine
+```
+pip install twine
+```
+- Upload to PyPI
+```
+twine upload dist/*
+```
