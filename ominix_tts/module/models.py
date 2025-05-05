@@ -18,8 +18,8 @@ from .commons import init_weights, get_padding
 from .mrte_model import MRTE
 from .quantize import ResidualVectorQuantizer
 # from text import symbols
-from ..text import symbols as symbols_v1
-from ..text import symbols2 as symbols_v2
+from ..text_processor import symbols as symbols_v1
+from ..text_processor import symbols2 as symbols_v2
 
 class StochasticDurationPredictor(nn.Module):
     def __init__(

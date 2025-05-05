@@ -99,3 +99,19 @@ flowchart TD
     R --> Z[End process_reference]
 ```    
  
+## Clean Reinstall package during development
+```
+# 1. Uninstall the package
+pip uninstall -y ominix-tts
+
+# 2. Remove build artifacts
+rm -rf build dist *.egg-info
+# unnecessary to remove __pycache__
+# find . -type d -name __pycache__ -exec rm -rf {} +;
+
+# 3. Clear pip's cache
+pip cache purge
+
+# 4. Reinstall
+pip install .
+```

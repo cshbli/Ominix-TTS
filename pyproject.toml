@@ -44,7 +44,7 @@ Homepage = "https://github.com/cshbli/Ominix-TTS"
 # Include data files in the package
 [tool.setuptools.package-data]
 "ominix_tts.tools.i18n" = ["locale/*.json"]
-"ominix_tts.text" = [
+"ominix_tts.text_processor" = [
     "opencpop-strict.txt", 
     "cmudict.rep", 
     "cmudict-fast.rep", 

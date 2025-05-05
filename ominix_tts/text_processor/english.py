@@ -15,10 +15,25 @@ from .symbols import punctuation
 from .symbols2 import symbols
 from .en_normalization.expend import normalize
 
+import nltk
+
+def ensure_nltk_resources():
+    """Ensure required NLTK resources are available."""
+    resources = ['averaged_perceptron_tagger_eng']
+    for resource in resources:
+        try:
+            nltk.data.find(f'taggers/{resource}')
+        except LookupError:
+            print(f"Downloading required NLTK resource: {resource}")
+            nltk.download(resource)
+
+# Call this function before using NLTK components
+ensure_nltk_resources()
+
 # # Replace direct file path references with importlib.resources
 try:
     # Python 3.9+
-    with importlib.resources.files("ominix_tts.text") as p:
+    with importlib.resources.files("ominix_tts.text_processor") as p:
         CMU_DICT_PATH = p / "cmudict.rep"
         CMU_DICT_FAST_PATH = p / "cmudict-fast.rep"
         CMU_DICT_HOT_PATH = p / "engdict-hot.rep"
