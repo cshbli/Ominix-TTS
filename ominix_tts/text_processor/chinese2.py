@@ -22,7 +22,7 @@ normalizer = lambda x: cn2an.transform(x, "an2cn")
 # Use importlib.resources to find the file
 try:
     # Python 3.9+
-    with importlib.resources.files("ominix_tts.text") as p:
+    with importlib.resources.files("ominix_tts.text_processor") as p:
         opencpop_file = p / "opencpop-strict.txt"
         with open(opencpop_file, "r") as f:
             pinyin_to_symbol_map = {
@@ -38,7 +38,7 @@ except (AttributeError, ImportError):
         
         # If direct path fails, try pkg_resources
         if not os.path.exists(file_path):
-            file_path = pkg_resources.resource_filename("ominix_tts.text", "opencpop-strict.txt")
+            file_path = pkg_resources.resource_filename("ominix_tts.text_processor", "opencpop-strict.txt")
         
         pinyin_to_symbol_map = {
             line.split("\t")[0]: line.strip().split("\t")[1]

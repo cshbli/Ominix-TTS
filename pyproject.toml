@@ -43,6 +43,10 @@ Homepage = "https://github.com/cshbli/Ominix-TTS"
 
 # Include data files in the package
 [tool.setuptools.package-data]
+"ominix_tts.dataset" = [
+    "doubao-ref-ours.wav",
+    "doubao-ref.txt"
+]
 "ominix_tts.tools.i18n" = ["locale/*.json"]
 "ominix_tts.text_processor" = [
     "opencpop-strict.txt", 

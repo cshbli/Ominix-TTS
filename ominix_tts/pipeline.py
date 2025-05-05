@@ -5,7 +5,7 @@ import traceback
 import time
 import ffmpeg
 import os
-from typing import Union
+from typing import List
 import numpy as np
 from peft import LoraConfig, get_peft_model
 import torch
@@ -77,6 +77,62 @@ def get_text_split_method(text_language: str, provided_method: str = "") -> str:
     else:
         return "cut5"  # Automatic language-specific splitting
 
+
+def load_text_file(file_path):
+    """
+    Load the contents of a text file as a string.
+    
+    Args:
+        file_path: Path to the text file
+        
+    Returns:
+        String containing the file contents
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            content = file.read().strip()
+        return content
+    except FileNotFoundError:
+        print(f"Error: File not found at {file_path}")
+        return ""
+    except Exception as e:
+        print(f"Error reading file: {str(e)}")
+        return ""
+
+
+def get_reference_path(relative_path):
+    """
+    Get the absolute path to a reference file, either from the installed package
+    or from the relative path.
+    
+    Args:
+        relative_path: Relative path within the package (e.g., "dataset/doubao-ref-ours.wav")
+        
+    Returns:
+        Absolute path to the reference file
+    """
+    try:
+        # Try to import ominix_tts to check if it's installed
+        import ominix_tts
+        import os.path
+        
+        # Get the package installation directory
+        package_dir = os.path.dirname(ominix_tts.__file__)
+        
+        # Construct absolute path to the reference file
+        absolute_path = os.path.join(package_dir, relative_path)
+        
+        # Verify the file exists at the package location
+        if os.path.exists(absolute_path):
+            return absolute_path
+        else:
+            print(f"Fall back to relative path if file doesn't exist in package")
+            return relative_path
+            
+    except ImportError:
+        print(f"Package not installed, use relative path")
+        return relative_path
+    
 
 def speed_change(input_audio:np.ndarray, speed:float, sr:int):
     # 将 NumPy 数组转换为原始 PCM 流
@@ -727,8 +783,8 @@ class MPipeline:
                 torch.mps.empty_cache()
         except:
             pass
-    
-    
+
+
     """ This decorator is used to optimize the performance of the inference function by disabling gradient calculation during inference. 
     When using this decorator: 
         1. Forward pass operations don't track gradients 
@@ -739,10 +795,9 @@ class MPipeline:
     def __call__(self, 
         text: str,   # input text
         text_language: str,  # select "en", "all_zh", "all_ja"
-        ref_audio_path: str,  # reference audio path          
-        ref_text: str = "",     # reference text
+        ref_audio_path: str = None,  # reference audio path          
+        ref_text: str = None,     # reference text
         ref_language: str = "all_zh",  # reference text language
-        ref_text_free: bool = False, # whether to use reference text
         aux_ref_audio_paths: list = [],
         batch_size: int = 100,             # inference batch size
         speed_factor: float = 1.0, # control speed of output audio
@@ -769,7 +824,6 @@ class MPipeline:
             ref_audio_path: Path to reference audio for voice cloning
             ref_text: Optional text corresponding to reference audio
             ref_language: Language of reference text
-            ref_text_free: Whether to ignore reference text
             aux_ref_audio_paths: Additional reference audio paths for voice fusion
             batch_size: Inference batch size
             speed_factor: Control speed of output audio
@@ -792,10 +846,16 @@ class MPipeline:
         """
         # Initialize stop flag
         self.stop_flag = False
-        
-        # Process input parameters
-        prompt_text = ref_text if not ref_text_free else ""
-        prompt_lang = ref_language
+
+        # If no reference audio is provided, use default
+        if ref_audio_path in [None, ""]:
+            # Use installed package path if available
+            default_audio_path = get_reference_path("dataset/doubao-ref-ours.wav")
+            default_text_path = get_reference_path("dataset/doubao-ref.txt")            
+            ref_audio_path = default_audio_path
+            ref_text = load_text_file(default_text_path)
+            ref_language = "all_zh"
+            print(f"Warning: No reference audio provided, using default reference audio: {ref_audio_path}")
 
         # Set text_split_method based on language if not provided
         text_split_method = get_text_split_method(text_language, text_split_method)
@@ -844,18 +904,18 @@ class MPipeline:
             print("############ Reference Audio/Text Processing ############")
             t_ref_start = time.perf_counter()
             
-            # Check if prompt text is required for V3 models
-            no_prompt_text = prompt_text in [None, ""]
-            if not no_prompt_text:
-                assert prompt_lang in self.configs.languages
-            if no_prompt_text and self.configs.is_v3_synthesizer:
-                raise NO_PROMPT_ERROR("prompt_text cannot be empty when using SoVITS_V3")
+            # Check if reference audio path is provided            
+            no_ref_text = ref_text in [None, ""]
+            if not no_ref_text:
+                assert ref_language in self.configs.languages
+            if no_ref_text and self.configs.is_v3_synthesizer:
+                raise NO_PROMPT_ERROR("ref_text cannot be empty when using SoVITS_V3")
             
             # Process reference audio and prompt text
             self.prompt_cache = self.reference_processor.process_reference(
                 ref_audio_path=ref_audio_path,
-                prompt_text=prompt_text,
-                prompt_lang=prompt_lang,
+                prompt_text=ref_text,
+                prompt_lang=ref_language,
                 model_version=self.configs.version,
                 aux_ref_audio_paths=aux_ref_audio_paths
             )
@@ -881,7 +941,7 @@ class MPipeline:
                 # Create inference batches
                 data, batch_index_list = self.text_preprocessor.create_inference_batches(
                     data,
-                    prompt_data=self.prompt_cache if not no_prompt_text else None,
+                    prompt_data=self.prompt_cache if not no_ref_text else None,
                     batch_size=batch_size,
                     similarity_threshold=batch_threshold,
                     split_bucket=split_bucket
@@ -926,7 +986,7 @@ class MPipeline:
                         batch_size,
                         batch_threshold,
                         version=self.configs.version,
-                        no_prompt_text=no_prompt_text
+                        no_prompt_text=no_ref_text
                     )
                     if item is None:
                         continue
@@ -943,7 +1003,7 @@ class MPipeline:
                 print(i18n("前端处理后的文本(每句):"), norm_text)
                 
                 # Prepare prompt for semantic generation
-                if no_prompt_text:
+                if no_ref_text:
                     prompt = None
                 else:
                     prompt = self.prompt_cache["prompt_semantic"].expand(len(all_phoneme_ids), -1).to(self.configs.device)
