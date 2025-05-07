@@ -39,6 +39,8 @@ Ominix-TTS operates through coordinated specialized models:
 
 The system supports different model versions (v1, v2, v3) with increasing capabilities and language support, allowing users to balance between quality, speed, and resource requirements.
 
+Please see [introduction.md](./introduction.md) for more technical details.
+
 ## Applications
 
 Ideal for creating audiobooks, virtual assistants, accessibility tools, content localization, and any application requiring high-quality speech synthesis with the ability to match specific voice characteristics.
@@ -46,13 +48,16 @@ Ideal for creating audiobooks, virtual assistants, accessibility tools, content 
 ## Usage
 
 1. Installation
-    - Please install `ffmpeg`. ffmpeg is used to decode the reference audio file. 
-        - For MacOS:
-        ```
-        brew install ffmpeg 
-        ```
+    - Please install `ffmpeg`. ffmpeg is used to decode the reference audio file.         
+    ```
+    # on MacOS using Homebrew (https://brew.sh)
+    brew install ffmpeg 
 
-    - Recommend to create one virtual environment to run tests and examples
+    # on Ubuntu or Debian
+    sudo apt update && sudop apt install ffmpeg
+    ```
+
+    - It is recommended to create one virtual environment, such as [Miniconda](https://www.anaconda.com/docs/getting-started/miniconda/main) for this step:
     ```
     conda create -n TTS python=3.9
     conda activate TTS
@@ -65,20 +70,21 @@ Ideal for creating audiobooks, virtual assistants, accessibility tools, content 
 
 2. Run a simple example with the default reference voice. For the first time run, it will take a little bit longer time since the models will be downloaded and cached locally.
     ```
-    python examples/test_with_reference.py
+    python examples/test_without_reference.py
     ```
     
-    The `test_with_reference.py` file:
+    [test_without_reference.py](./examples/test_without_reference.py):
     ```
     import soundfile as sf
 
     from ominix_tts import MPipeline
 
+    # Initialize the pipeline and load the models
     pipeline = MPipeline()
 
     text = "This is a sample text for testing Ominix TTS voice synthesis."
 
-    # Using the default reference audio and text
+    # Start the TTS pipeline inference with the default reference audio and text
     result_generator = pipeline(text=text, text_language="en")
 
     # Process the generated audio

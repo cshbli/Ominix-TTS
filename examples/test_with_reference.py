@@ -2,6 +2,7 @@ import soundfile as sf
 
 from ominix_tts import MPipeline
 
+# Initialize the pipeline and load the models
 pipeline = MPipeline()
 
 text = "Well, you know what the say , Families are like fudge, mostly sweet, but sometimes nuts. My family is doing great, thanks for asking!  My son is growing up to be a smart and handsome young man, just like his mom. He's currently working on his own talker show, which I'm sure will be even more hilarious than mine." 
